@@ -1045,17 +1045,15 @@ def start_scheduler():
     """Start the scheduler to run updates automatically"""
     logging.info("Starting automated scheduler for weekly data extraction...")
     
-    # Schedule the job to run every 6 hours to check for new weeks
-    schedule.every(6).hours.do(scheduled_update)
+    # Schedule the job to run once per week (Monday at 9:00 AM)
+    schedule.every().monday.at("09:00").do(scheduled_update)
     
-    # Also run once immediately
+    # Also run once immediately when started
     schedule.every().day.at("09:00").do(scheduled_update)
-    schedule.every().day.at("15:00").do(scheduled_update)
-    schedule.every().day.at("21:00").do(scheduled_update)
     
     logging.info("Scheduler started. Updates will run:")
-    logging.info("- Every 6 hours automatically")
-    logging.info("- Daily at 9:00 AM, 3:00 PM, and 9:00 PM")
+    logging.info("- Every Monday at 9:00 AM (weekly check)")
+    logging.info("- Daily at 9:00 AM (for immediate updates)")
     logging.info("- Press Ctrl+C to stop the scheduler.")
     
     try:

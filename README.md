@@ -82,9 +82,9 @@ Each Excel file contains 16 sheets:
 ## ⚙️ Configuration
 
 ### **Automation Schedule**
-- **Every 6 hours** - Full scan and update
-- **Daily at 9 AM, 3 PM, 9 PM** - Regular checks
-- **Immediate detection** - When new data is published
+- **Every Monday at 9:00 AM** - Weekly check for new data
+- **Daily at 9:00 AM** - Immediate updates when started
+- **Manual updates** - Run anytime with `python hexa_fixed.py --update`
 
 ### **Data Sources**
 - Government website: `http://164.100.60.165/comm/dsa.html`
@@ -143,7 +143,7 @@ tail -f hexa_updates.log
 
 ### **Scenario 1: New Week Published**
 1. Government publishes Week 18 data
-2. Script detects new week (6-hour check)
+2. Script detects new week (Monday 9:00 AM check)
 3. Downloads `Supporting_files.xls` for Week 18
 4. Creates `Supporting_files_280725-030825(WK-18).xlsx`
 5. Logs successful processing
