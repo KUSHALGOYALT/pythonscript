@@ -1,199 +1,221 @@
-# 🚀 Automated DSA Data Extraction System
+# Regional Power Committee Data Extraction System
 
-A Python-based automation system for extracting and processing weekly DSA (Deviation Settlement Account) data from government websites.
+A comprehensive Python-based data extraction system for automatically collecting and processing DSM (Daily Scheduling and Accounting) data from various Regional Power Committees across India.
 
-## 📋 Overview
+## 🎯 Overview
 
-This system automatically:
-- 🔍 **Discovers** new weekly data from government websites
-- 📥 **Downloads** Excel files with DSA data
-- 🔄 **Processes** data into organized Excel files
-- 📊 **Organizes** files by week with unique naming
-- ⏰ **Monitors** continuously for updates
+This system provides automated data extraction from three major regional power committees:
+- **ERLDC**: Eastern Regional Load Dispatch Centre
+- **NRLDC**: Northern Regional Load Dispatch Centre  
+- **WRPC**: Western Regional Power Committee
 
-## 🎯 Features
-
-### ✅ **Fully Automated**
-- Automatic week detection using regex patterns
-- Continuous monitoring every 6 hours
-- Smart change detection using file hashing
-- Automatic file processing and organization
-
-### 📊 **Data Processing**
-- Extracts 16+ sheets from each Excel file
-- Removes duplicate records automatically
-- Maintains original data structure
-- Creates unique filenames per week
-
-### 🔄 **Update Management**
-- Detects new weeks automatically
-- Updates existing week data when changes occur
-- Maintains data integrity with deduplication
-- Comprehensive logging and tracking
-
-## 📁 File Structure
+## 📁 Project Structure
 
 ```
-Pythonscriptforextracting/
-├── hexa_fixed.py                    # Main automation script
-├── requirements.txt                 # Python dependencies
-├── hexa_updates.log                # Detailed activity logs
-├── Supporting_files_*.xlsx         # Extracted weekly data files
-└── README.md                       # This file
+Script/
+├── dsm_data/                    # Main data directory
+│   ├── ERLDC/                   # Eastern Regional Load Dispatch Centre
+│   │   ├── scripts/             # ERLDC extraction scripts
+│   │   │   ├── erpc_extractor.py
+│   │   │   ├── requirements_erpc.txt
+│   │   │   └── README_ERPC.md
+│   │   └── data/                # ERLDC processed data files
+│   ├── NRLDC/                   # Northern Regional Load Dispatch Centre
+│   │   ├── scripts/             # NRLDC extraction scripts
+│   │   │   ├── dsm_extractor.py
+│   │   │   ├── requirements_nrldc.txt
+│   │   │   └── README_NRLDC.md
+│   │   └── data/                # NRLDC processed data files
+│   └── WRPC/                    # Western Regional Power Committee
+│       ├── scripts/             # WRPC extraction scripts
+│       │   ├── wrpc_extractor.py
+│       │   ├── requirements_wrpc.txt
+│       │   └── README_WRPC.md
+│       └── data/                # WRPC processed data files
+├── README.md                    # This file - main documentation
+├── requirements.txt             # Main project dependencies
+├── .gitignore                   # Git ignore rules
+└── .git/                        # Git repository
 ```
 
 ## 🚀 Quick Start
 
-### 1. **Install Dependencies**
+### 1. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. **Run Manual Update**
+### 2. Run Regional Extractors
+
+**For Eastern Region (ERLDC):**
 ```bash
-python hexa_fixed.py --update
+cd dsm_data/ERLDC/scripts
+pip install -r requirements_erpc.txt
+python erpc_extractor.py --update
 ```
 
-### 3. **Start Automation**
+**For Northern Region (NRLDC):**
 ```bash
-python hexa_fixed.py --schedule
+cd dsm_data/NRLDC/scripts
+pip install -r requirements_nrldc.txt
+python dsm_extractor.py --update
 ```
 
-## 📊 Output Files
+**For Western Region (WRPC):**
+```bash
+cd dsm_data/WRPC/scripts
+pip install -r requirements_wrpc.txt
+python wrpc_extractor.py --update
+```
 
-### **File Naming Convention**
-- `Supporting_files_070725-130725(WK-15).xlsx`
-- `Supporting_files_210725-270725(WK-17).xlsx`
+## 🎯 Features
 
-### **Data Structure**
-Each Excel file contains 16 sheets:
-- `DC_Stations` - Station data
-- `Solar_availability` - Solar availability data
-- `Drl_Sch_States` - State schedule data
-- `Act_Inj_Gen_Stations` - Generation station data
-- `Act_Drl_States` - State data
-- `Frequency` - Frequency data
-- `GS_Stations` - GS station data
-- `Deviation_Charges` - Deviation charges
-- `Normal_Rate` - Normal rate data
-- `Contract_Rate` - Contract rate data
-- And 6 more sheets...
+### Core Capabilities
+- **Automated Web Scraping**: Intelligent scraping of regional power committee websites
+- **Multi-format Support**: Handles Excel (.xls, .xlsx), ZIP, and CSV files
+- **Intelligent File Tracking**: MD5 hash-based change detection
+- **Multi-sheet Processing**: Processes Excel files with multiple sheets
+- **Automated Scheduling**: Weekly automated updates
+- **Comprehensive Logging**: Detailed operation tracking
+- **Data Cleaning**: Automatic data validation and cleaning
+
+### Regional Specific Features
+
+#### ERLDC (Eastern Region)
+- Extracts DSM Blockwise Data from ERPC website
+- Processes multiple Excel sheets with power station data
+- Categorizes data by Eastern region stations
+- Handles weekly data updates
+
+#### NRLDC (Northern Region)
+- Extracts DSM data from Northern region sources
+- Processes Excel files with power scheduling data
+- Organizes data by Northern region stations
+- Automated weekly data collection
+
+#### WRPC (Western Region)
+- Extracts DSM UI Account data from WRPC website
+- Processes ZIP archives containing CSV files
+- Handles complex multi-station data structures
+- Extracts 95+ power station datasets
+
+## 📊 Data Organization
+
+### File Structure
+Each regional folder contains:
+- **Scripts**: Python extractors, requirements, and documentation
+- **Data**: Processed Excel files with multiple sheets
+- **Logs**: Operation logs (generated during execution)
+
+### Data Categories
+- **DSM Data**: Daily Scheduling and Accounting information
+- **Power Station Data**: Individual station performance metrics
+- **Regional Exchanges**: Inter-regional power transfer data
+- **Scheduling Data**: Power scheduling and deviation information
 
 ## ⚙️ Configuration
 
-### **Automation Schedule**
-- **Every Monday at 9:00 AM** - Weekly check for new data
-- **Daily at 9:00 AM** - Immediate updates when started
-- **Manual updates** - Run anytime with `python hexa_fixed.py --update`
+### Scheduling
+- **Weekly Updates**: Every Monday at 9:00 AM
+- **Daily Checks**: Every day at 9:00 AM (when running)
+- **Manual Updates**: On-demand execution with `--update` flag
 
-### **Data Sources**
-- Government website: `http://164.100.60.165/comm/dsa.html`
-- Multiple financial years: 2021-22, 2022-23, 2023-24
-- Supporting files for each week
-
-## 📝 Usage Examples
-
-### **Check Current Status**
-```bash
-python hexa_fixed.py --update
-```
-
-### **Start Continuous Monitoring**
-```bash
-python hexa_fixed.py --schedule
-```
-
-### **View Logs**
-```bash
-tail -f hexa_updates.log
-```
+### File Tracking
+- **Change Detection**: MD5 hash comparison
+- **Duplicate Prevention**: Automatic duplicate detection
+- **Version Control**: Timestamped file naming
 
 ## 🔧 Technical Details
 
-### **Key Functions**
-- `scrape_government_website()` - Discovers weeks and files
-- `download_and_process_file()` - Downloads and processes Excel files
-- `process_weekly_dataframe()` - Creates organized Excel output
-- `scheduled_update()` - Main automation loop
+### Supported File Formats
+- **Input**: Excel (.xls, .xlsx), ZIP archives, CSV files
+- **Output**: Excel (.xlsx) with multiple sheets
+- **Logs**: Text-based logging with timestamps
 
-### **Change Detection**
-- Uses MD5 hashing to detect file changes
-- Tracks file modifications in `file_tracking.json`
-- Prevents unnecessary downloads
+### Error Handling
+- **Network Resilience**: Automatic retry mechanisms
+- **File Corruption**: Graceful handling of corrupted files
+- **Encoding Issues**: Multi-encoding support
+- **Missing Data**: Robust error recovery
 
-### **Error Handling**
-- Robust error recovery for corrupted files
-- Automatic retry mechanisms
-- Comprehensive logging
+## 📝 Usage Examples
 
-## 📈 Monitoring
+### Manual Data Extraction
+```bash
+# Extract ERLDC data
+cd dsm_data/ERLDC/scripts
+python erpc_extractor.py --update
 
-### **Log File: `hexa_updates.log`**
-- Discovery logs: `📅 Discovered week: 210725-270725(WK-17)`
-- Processing logs: `🎯 Found supporting file: Supporting_files.xls`
-- Update logs: `✅ Successfully updated Excel file`
-- Error logs: `❌ Failed to process file`
+# Extract NRLDC data  
+cd dsm_data/NRLDC/scripts
+python dsm_extractor.py --update
 
-### **File Tracking: `file_tracking.json`**
-- File hashes for change detection
-- Last update timestamps
-- Processing history
+# Extract WRPC data
+cd dsm_data/WRPC/scripts
+python wrpc_extractor.py --update
+```
 
-## 🎯 Use Cases
+### Automated Scheduling
+```bash
+# Start automated scheduler for any region
+python [extractor_name].py --schedule
+```
 
-### **Scenario 1: New Week Published**
-1. Government publishes Week 18 data
-2. Script detects new week (Monday 9:00 AM check)
-3. Downloads `Supporting_files.xls` for Week 18
-4. Creates `Supporting_files_280725-030825(WK-18).xlsx`
-5. Logs successful processing
+### Help and Documentation
+```bash
+# Get help for any extractor
+python [extractor_name].py --help
+```
 
-### **Scenario 2: Existing Week Updated**
-1. Government updates Week 15 data
-2. Script detects hash change
-3. Downloads updated file
-4. Replaces existing `Supporting_files_070725-130725(WK-15).xlsx`
-5. Logs update completion
+## 🔍 Monitoring and Logs
 
-## 🔒 Security & Performance
+### Log Files
+- Each extractor generates detailed logs
+- Logs include file discovery, processing, and error information
+- Timestamped entries for easy tracking
 
-### **Security Features**
-- Secure file handling
-- Error logging without sensitive data
-- Robust authentication handling
+### Data Validation
+- Automatic data quality checks
+- Empty row/column removal
+- Column name cleaning and standardization
+- Data type validation
 
-### **Performance Optimizations**
-- Efficient file processing
-- Smart change detection
-- Minimal network usage
+## 🚨 Troubleshooting
+
+### Common Issues
+1. **Network Connectivity**: Check internet connection
+2. **File Permissions**: Ensure write access to data directories
+3. **Dependencies**: Verify all Python packages are installed
+4. **Website Changes**: Regional websites may update their structure
+
+### Debug Mode
+Enable detailed logging by modifying the logging level in each script:
+```python
+logging.basicConfig(level=logging.DEBUG, ...)
+```
 
 ## 📞 Support
 
-### **Troubleshooting**
-- Check `hexa_updates.log` for detailed error information
-- Verify internet connectivity
-- Ensure proper file permissions
+For issues or questions:
+1. Check the log files for detailed error messages
+2. Verify network connectivity to regional websites
+3. Ensure all dependencies are installed correctly
+4. Check file permissions in data directories
 
-### **Common Issues**
-1. **Authentication Failed** - Check network connectivity
-2. **File Corruption** - Script automatically recreates files
-3. **No New Data** - Normal when no updates are available
+## 🔗 Related Documentation
 
-## 🚀 Future Enhancements
-
-- [ ] Email notifications for new data
-- [ ] Web dashboard for monitoring
-- [ ] API endpoints for data access
-- [ ] Advanced analytics integration
+- **ERLDC**: See `dsm_data/ERLDC/scripts/README_ERPC.md`
+- **NRLDC**: See `dsm_data/NRLDC/scripts/README_NRLDC.md`
+- **WRPC**: See `dsm_data/WRPC/scripts/README_WRPC.md`
 
 ## 📄 License
 
-This project is developed for Hexa Climate internal use.
+This system is provided as-is for data extraction purposes. Please ensure compliance with respective regional power committee website terms of service.
 
-## 👨‍💻 Author
+## 🎯 Future Enhancements
 
-**Kushal Goyal** - `kushal.goyal@hexaclimate.com`
-
----
-
-**🎉 Your automated DSA data extraction system is ready to use!**
+- Additional regional power committees
+- Enhanced data visualization
+- API integration capabilities
+- Real-time data streaming
+- Advanced analytics features
