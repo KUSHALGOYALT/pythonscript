@@ -6,13 +6,9 @@ Extracts and processes DSM UI Account data from WRPC website
 
 import os
 import sys
-import json
-import hashlib
 import logging
 import requests
 import pandas as pd
-import schedule
-import time
 from datetime import datetime
 from urllib.parse import urljoin
 from bs4 import BeautifulSoup
@@ -35,8 +31,6 @@ WRPC_DSM_URL = "https://www.wrpc.gov.in/menu/DSMUI%20Account%20_342"
 WRPC_SAMPLE_FILE = "https://www.wrpc.gov.in/allfile/070820251025026574sum4c.zip"
 DOWNLOAD_DIR = "dsm_data"
 WRPC_DIR = "dsm_data/WRPC"
-TEMP_DIR = "temp_wrpc"
-FILE_TRACKING_FILE = "wrpc_file_tracking.json"
 
 # Data types for categorization
 DATA_TYPES = {
@@ -47,36 +41,11 @@ DATA_TYPES = {
 
 def setup_directories():
     """Create necessary directories"""
-    for directory in [DOWNLOAD_DIR, WRPC_DIR, TEMP_DIR]:
+    for directory in [DOWNLOAD_DIR, WRPC_DIR]:
         os.makedirs(directory, exist_ok=True)
         logging.info(f"Created directory: {directory}")
 
-def load_file_tracking():
-    """Load file tracking data"""
-    if os.path.exists(FILE_TRACKING_FILE):
-        try:
-            with open(FILE_TRACKING_FILE, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logging.warning(f"Error loading file tracking: {e}")
-    return {}
 
-def save_file_tracking(tracking_data):
-    """Save file tracking data"""
-    try:
-        with open(FILE_TRACKING_FILE, 'w') as f:
-            json.dump(tracking_data, f, indent=2)
-    except Exception as e:
-        logging.error(f"Error saving file tracking: {e}")
-
-def get_file_hash(file_path):
-    """Calculate MD5 hash of a file"""
-    try:
-        with open(file_path, 'rb') as f:
-            return hashlib.md5(f.read()).hexdigest()
-    except Exception as e:
-        logging.error(f"Error calculating file hash: {e}")
-        return None
 
 def scrape_wrpc_website():
     """Scrape the WRPC website for DSM data"""
@@ -201,7 +170,7 @@ def download_file(url, filename):
         resp = requests.get(url, timeout=60, stream=True, verify=True)
         resp.raise_for_status()
         
-        file_path = os.path.join(TEMP_DIR, filename)
+        file_path = os.path.join(WRPC_DIR, filename)
         
         with open(file_path, 'wb') as f:
             for chunk in resp.iter_content(chunk_size=8192):
@@ -343,47 +312,10 @@ def save_processed_data(processed_data, original_filename):
         logging.error(f"❌ Error saving processed data: {e}")
         return None
 
-def check_for_changes(file_info, tracking_data):
-    """Check if file has changed"""
-    filename = file_info['href']
-    current_hash = None
-    
-    # Check in all possible directories for existing file
-    possible_paths = [
-        os.path.join(DOWNLOAD_DIR, filename),
-        os.path.join(WRPC_DIR, filename)
-    ]
-    
-    local_path = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            local_path = path
-            break
-    
-    if local_path:
-        current_hash = get_file_hash(local_path)
-    
-    # Check if file has changed
-    if filename in tracking_data:
-        if current_hash and tracking_data[filename]['hash'] == current_hash:
-            logging.info(f"📋 No changes detected in: {filename}")
-            return False
-        else:
-            logging.info(f"🔄 Change detected in: {filename}")
-            return True
-    else:
-        logging.info(f"🆕 New file detected: {filename}")
-        return True
-
 def download_and_process_file(file_info, data_type):
     """Download and process a single file"""
     filename = file_info['href']
     url = file_info['url']
-    
-    # Check for changes
-    tracking_data = load_file_tracking()
-    if not check_for_changes(file_info, tracking_data):
-        return True
     
     # Download file
     file_path = download_file(url, filename)
@@ -412,29 +344,13 @@ def download_and_process_file(file_info, data_type):
     if processed_data:
         output_path = save_processed_data(processed_data, filename)
         if output_path:
-            # Update tracking
-            file_hash = get_file_hash(file_path)
-            if file_hash:
-                tracking_data[filename] = {
-                    'hash': file_hash,
-                    'last_processed': datetime.now().isoformat(),
-                    'type': data_type,
-                    'url': url
-                }
-                save_file_tracking(tracking_data)
             return True
-    
-    # Clean up temp file
-    try:
-        os.remove(file_path)
-    except:
-        pass
     
     return False
 
-def scheduled_update():
-    """Run scheduled update"""
-    logging.info("🕐 Starting scheduled WRPC data update...")
+def run_update():
+    """Run WRPC data update"""
+    logging.info("🔄 Starting WRPC data update...")
     
     try:
         # Ensure directories exist
@@ -455,47 +371,20 @@ def scheduled_update():
         logging.info(f"✅ WRPC update completed. Processed {total_processed} files.")
         
     except Exception as e:
-        logging.error(f"❌ Error in scheduled update: {e}")
-
-def start_scheduler():
-    """Start automated scheduler"""
-    logging.info("🚀 Starting WRPC automated scheduler...")
-    
-    # Schedule weekly updates
-    schedule.every().monday.at("09:00").do(scheduled_update)
-    schedule.every().day.at("09:00").do(scheduled_update)  # For immediate updates
-    
-    logging.info("📅 Scheduled WRPC updates:")
-    logging.info("  - Every Monday at 9:00 AM")
-    logging.info("  - Every day at 9:00 AM (when running)")
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-def run_manual_update():
-    """Run manual update"""
-    logging.info("🔧 Running manual WRPC update...")
-    setup_directories()  # Ensure directories exist
-    scheduled_update()
+        logging.error(f"❌ Error in update: {e}")
 
 def main():
     """Main function"""
     if len(sys.argv) > 1:
-        if sys.argv[1] == "--update":
-            run_manual_update()
-        elif sys.argv[1] == "--schedule":
-            start_scheduler()
-        elif sys.argv[1] == "--help":
+        if sys.argv[1] == "--help":
             print("WRPC Data Extractor Usage:")
-            print("  --update   : Run one-time update")
-            print("  --schedule : Start automated scheduler")
-            print("  --help     : Show this help")
+            print("  python wrpc_extractor.py          # Run data extraction")
+            print("  python wrpc_extractor.py --help   # Show this help")
         else:
             print("Unknown option. Use --help for usage information.")
     else:
-        print("WRPC Data Extractor")
-        print("Use --help for usage information.")
+        # Run data extraction
+        run_update()
 
 if __name__ == "__main__":
     main()

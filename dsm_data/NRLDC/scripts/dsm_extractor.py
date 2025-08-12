@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-DSM Blockwise Data Extractor
-Extracts specific DSM data from ERPC website
+DSM Blockwise Data Extractor for Northern Regional Power Committee (NRPC)
+Extracts DSM data from NRPC website
 """
 
 import requests
@@ -10,6 +10,8 @@ import os
 import logging
 from datetime import datetime
 from pathlib import Path
+from bs4 import BeautifulSoup
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -22,30 +24,94 @@ logging.basicConfig(
 )
 
 # Configuration
-DSM_FILE_URL = "https://erpc.gov.in/wp-content/uploads/2025/08/DSM_Blockwise_Data_2025-07-21-2025-07-27.xlsx"
+NRPC_BASE_URL = "http://164.100.60.165/comm/dsa.html"
 DOWNLOAD_DIR = "dsm_data"
-ERLDC_DIR = "dsm_data/ERLDC"
 NRLDC_DIR = "dsm_data/NRLDC"
-TEMP_DIR = "temp_dsm"
 
 def setup_directories():
     """Create necessary directories"""
-    for directory in [DOWNLOAD_DIR, ERLDC_DIR, NRLDC_DIR, TEMP_DIR]:
+    for directory in [DOWNLOAD_DIR, NRLDC_DIR]:
         os.makedirs(directory, exist_ok=True)
         logging.info(f"Created directory: {directory}")
 
-def download_dsm_file():
+def get_latest_dsm_file_url():
+    """Get the latest DSM file URL from NRPC website"""
+    try:
+        logging.info(f"Fetching NRPC website: {NRPC_BASE_URL}")
+        
+        # Fetch the main page
+        response = requests.get(NRPC_BASE_URL, timeout=30)
+        response.raise_for_status()
+        
+        # Parse HTML content
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Find the dropdown with week options
+        week_options = []
+        select_element = soup.find('select', {'name': 'wk'})
+        
+        if select_element:
+            for option in select_element.find_all('option'):
+                value = option.get('value')
+                if value and 'WK-' in value:
+                    week_options.append(value)
+                    logging.info(f"Found week option: {value}")
+        
+        if week_options:
+            # Look for the most recent 2021 data (since the URL should be 2021-22)
+            # Filter for dates that end with '21' (year 2021)
+            week_2021_options = [week for week in week_options if week.split('-')[0].endswith('21')]
+            
+            if week_2021_options:
+                latest_week = week_2021_options[0]  # Get the first (most recent) 2021 week
+                logging.info(f"Selected latest 2021 week: {latest_week}")
+            else:
+                # Fallback to the first option if no 2021 data found
+                latest_week = week_options[0]
+                logging.info(f"No 2021 data found, using latest week: {latest_week}")
+            
+            # Construct the DSM file URL based on the pattern
+            # Pattern: 164.100.60.165/comm/2021-22/dsa/210725-270725(WK-17)/Supporting_files.xls
+            # Extract year from the week pattern (e.g., 210725 -> 2021)
+            week_start = latest_week.split('-')[0]
+            
+            # The date format is DDMMYY, so extract year from the last 2 digits
+            # For example: 210725 -> 21 (year 2021)
+            year_suffix = week_start[4:6]  # Extract year from date like 210725 -> 21
+            
+            # Based on the URL pattern: 164.100.60.165/comm/2021-22/dsa/210725-270725(WK-17)/Supporting_files.xls
+            # The date 210725 is July 21, 2021, and the FY is 2021-22
+            # So the financial year starts in the same year as the date
+            fy_start = 2000 + int(year_suffix)
+            fy_end = fy_start + 1
+            
+            dsm_url = f"http://164.100.60.165/comm/{fy_start}-{str(fy_end)[2:]}/dsa/{latest_week}/Supporting_files.xls"
+            logging.info(f"Constructed DSM URL: {dsm_url}")
+            
+            return dsm_url
+        else:
+            logging.warning("No week options found on NRPC website")
+            return None
+            
+    except Exception as e:
+        logging.error(f"❌ Error fetching NRPC website: {e}")
+        return None
+
+def download_dsm_file(file_url):
     """Download the DSM file"""
     try:
-        logging.info(f"Downloading DSM file: {DSM_FILE_URL}")
+        logging.info(f"Downloading DSM file: {file_url}")
         
         # Download the file
-        resp = requests.get(DSM_FILE_URL, timeout=60, stream=True, verify=True)
+        resp = requests.get(file_url, timeout=60, stream=True)
         resp.raise_for_status()
         
-        # Save to temp directory
-        filename = "DSM_Blockwise_Data_2025-07-21-2025-07-27.xlsx"
-        file_path = os.path.join(TEMP_DIR, filename)
+        # Extract filename from URL
+        filename = file_url.split('/')[-1]
+        if not filename or '.' not in filename:
+            filename = f"DSM_NRPC_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xls"
+        
+        file_path = os.path.join(NRLDC_DIR, filename)
         
         with open(file_path, 'wb') as f:
             for chunk in resp.iter_content(chunk_size=8192):
@@ -89,12 +155,12 @@ def process_dsm_file(file_path):
                         # Show first few rows for preview
                         logging.info(f"📊 Preview of sheet '{sheet_name}':")
                         logging.info(f"Columns: {list(df.columns)}")
-                        logging.info(f"First 3 rows:\n{df.head(3)}")
-                        
+                        if len(df) > 0:
+                            logging.info(f"First row: {df.iloc[0].to_dict()}")
                     else:
-                        logging.warning(f"⚠️ Sheet '{sheet_name}' is empty after cleaning")
+                        logging.warning(f"Sheet '{sheet_name}' is empty after cleaning")
                 else:
-                    logging.warning(f"⚠️ Sheet '{sheet_name}' is empty")
+                    logging.warning(f"Sheet '{sheet_name}' is empty")
                     
             except Exception as e:
                 logging.error(f"❌ Error processing sheet '{sheet_name}': {e}")
@@ -103,7 +169,7 @@ def process_dsm_file(file_path):
         return processed_data
         
     except Exception as e:
-        logging.error(f"❌ Error processing DSM file {file_path}: {e}")
+        logging.error(f"❌ Error processing DSM file: {e}")
         return None
 
 def save_processed_data(processed_data):
@@ -113,78 +179,17 @@ def save_processed_data(processed_data):
         return None
     
     try:
-        # Determine target directory based on content analysis
-        target_dir = DOWNLOAD_DIR  # Default directory
-        
-        # Analyze content to determine if it's ERLDC or NRLDC data
-        if processed_data:
-            # Define Eastern and Northern region station keywords
-            eastern_stations = [
-                'bsphcl', 'dvc', 'east central railway', 'gridco', 'sikkim', 'wbsetcl', 
-                'apnrl', 'chuzachen', 'dikchu', 'gmrkel', 'jipl', 'rongnichu hep', 
-                'talcher solar', 'nvvn-bd', 'nea-bihar', 'nvvn-nepal', 'nvvn_bhutan',
-                'barh-ii', 'barh-i', 'brbcl', 'darlipali', 'fstpp', 'jsweul', 
-                'jorethang hep', 'khstpp', 'mpl', 'mtps', 'north karanpura', 'npgc', 
-                'rangit', 'teesta', 'thep', 'tstpp', 'ner', 'eastern'
-            ]
-            
-            northern_stations = [
-                'nr', 'northern', 'nrldc', 'north'
-            ]
-            
-            # Check all sheets for regional indicators
-            erldc_indicators = 0
-            nrldc_indicators = 0
-            
-            for sheet_name, df in processed_data.items():
-                if not df.empty:
-                    # Check sheet name for regional indicators
-                    sheet_name_lower = sheet_name.lower()
-                    
-                    # Check for Eastern region stations in sheet name
-                    if any(station in sheet_name_lower for station in eastern_stations):
-                        erldc_indicators += 1
-                        logging.info(f"📁 Found Eastern station in sheet name: {sheet_name}")
-                    
-                    # Check for Northern region stations in sheet name
-                    elif any(station in sheet_name_lower for station in northern_stations):
-                        nrldc_indicators += 1
-                        logging.info(f"📁 Found Northern station in sheet name: {sheet_name}")
-                    
-                    # Check data content for station names
-                    sample_data = df.head(10).astype(str).to_string().lower()
-                    
-                    # Check for Eastern region stations in data
-                    if any(station in sample_data for station in eastern_stations):
-                        erldc_indicators += 1
-                        logging.info(f"📁 Found Eastern station in data: {sheet_name}")
-                    
-                    # Check for Northern region stations in data
-                    elif any(station in sample_data for station in northern_stations):
-                        nrldc_indicators += 1
-                        logging.info(f"📁 Found Northern station in data: {sheet_name}")
-            
-            # Determine target directory based on indicators
-            if erldc_indicators > nrldc_indicators:
-                target_dir = ERLDC_DIR
-                logging.info(f"📁 Content analysis: Categorizing as ERLDC data ({erldc_indicators} indicators)")
-            elif nrldc_indicators > erldc_indicators:
-                target_dir = NRLDC_DIR
-                logging.info(f"📁 Content analysis: Categorizing as NRLDC data ({nrldc_indicators} indicators)")
-            else:
-                # Default to main directory if no clear indicators
-                logging.info(f"📁 No clear ERLDC/NRLDC indicators found, saving to main directory")
-        
-        # Create output filename with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_filename = f"DSM_Blockwise_Data_processed_{timestamp}.xlsx"
-        output_path = os.path.join(target_dir, output_filename)
+        # Generate output filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_filename = f"DSM_NRPC_processed_{timestamp}.xlsx"
+        output_path = os.path.join(NRLDC_DIR, output_filename)
         
         # Save to Excel with multiple sheets
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             for sheet_name, df in processed_data.items():
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-                logging.info(f"💾 Saved sheet '{sheet_name}' with {len(df)} rows")
+                # Clean sheet name for Excel (remove invalid characters)
+                clean_sheet_name = re.sub(r'[\\/*?:\[\]]', '_', sheet_name)
+                df.to_excel(writer, sheet_name=clean_sheet_name, index=False)
         
         logging.info(f"✅ Saved processed data to: {output_path}")
         return output_path
@@ -195,37 +200,39 @@ def save_processed_data(processed_data):
 
 def main():
     """Main function"""
-    logging.info("🚀 Starting DSM Blockwise Data extraction...")
-    
-    # Setup directories
-    setup_directories()
-    
-    # Download the DSM file
-    file_path = download_dsm_file()
-    if not file_path:
-        logging.error("❌ Failed to download DSM file")
-        return
-    
-    # Process the file
-    processed_data = process_dsm_file(file_path)
-    if not processed_data:
-        logging.error("❌ Failed to process DSM file")
-        return
-    
-    # Save processed data
-    output_path = save_processed_data(processed_data)
-    if output_path:
-        logging.info("✅ DSM data extraction completed successfully!")
-        logging.info(f"📁 Output file: {output_path}")
-    else:
-        logging.error("❌ Failed to save processed data")
-    
-    # Clean up temp file
     try:
-        os.remove(file_path)
-        logging.info("🧹 Cleaned up temporary file")
-    except:
-        pass
+        logging.info("🚀 Starting NRPC DSM data extraction...")
+        
+        # Setup directories
+        setup_directories()
+        
+        # Get latest DSM file URL
+        dsm_url = get_latest_dsm_file_url()
+        if not dsm_url:
+            logging.error("❌ Could not find DSM file URL")
+            return
+        
+        # Download the file
+        file_path = download_dsm_file(dsm_url)
+        if not file_path:
+            logging.error("❌ Could not download DSM file")
+            return
+        
+        # Process the file
+        processed_data = process_dsm_file(file_path)
+        if not processed_data:
+            logging.error("❌ Could not process DSM file")
+            return
+        
+        # Save processed data
+        output_path = save_processed_data(processed_data)
+        if output_path:
+            logging.info("🎉 NRPC DSM data extraction completed successfully!")
+        else:
+            logging.error("❌ Could not save processed data")
+            
+    except Exception as e:
+        logging.error(f"❌ Unexpected error: {e}")
 
 if __name__ == "__main__":
     main()

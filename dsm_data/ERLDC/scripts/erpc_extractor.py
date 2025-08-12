@@ -9,15 +9,10 @@ import pandas as pd
 import os
 import logging
 import re
-import time
-import json
-import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
-import schedule
 import sys
-import glob
 from pathlib import Path
 
 # Configure logging
@@ -36,9 +31,6 @@ ERPC_DSA_URL = "https://erpc.gov.in/ui-and-deviation-accts/"
 ERPC_SPECIFIC_FILE = "https://erpc.gov.in/wp-content/uploads/2025/08/DSM_Blockwise_Data_2025-07-21-2025-07-27.xlsx"
 DOWNLOAD_DIR = "dsm_data"
 ERLDC_DIR = "dsm_data/ERLDC"
-NRLDC_DIR = "dsm_data/NRLDC"
-TEMP_DIR = "temp_erpc"
-FILE_TRACKING_FILE = "erpc_file_tracking.json"
 
 # Data types for categorization
 DATA_TYPES = {
@@ -50,36 +42,11 @@ DATA_TYPES = {
 
 def setup_directories():
     """Create necessary directories"""
-    for directory in [DOWNLOAD_DIR, ERLDC_DIR, NRLDC_DIR, TEMP_DIR]:
+    for directory in [DOWNLOAD_DIR, ERLDC_DIR]:
         os.makedirs(directory, exist_ok=True)
         logging.info(f"Created directory: {directory}")
 
-def load_file_tracking():
-    """Load file tracking data"""
-    if os.path.exists(FILE_TRACKING_FILE):
-        try:
-            with open(FILE_TRACKING_FILE, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logging.warning(f"Error loading file tracking: {e}")
-    return {}
 
-def save_file_tracking(tracking_data):
-    """Save file tracking data"""
-    try:
-        with open(FILE_TRACKING_FILE, 'w') as f:
-            json.dump(tracking_data, f, indent=2)
-    except Exception as e:
-        logging.error(f"Error saving file tracking: {e}")
-
-def get_file_hash(file_path):
-    """Calculate MD5 hash of a file"""
-    try:
-        with open(file_path, 'rb') as f:
-            return hashlib.md5(f.read()).hexdigest()
-    except Exception as e:
-        logging.error(f"Error calculating file hash: {e}")
-        return None
 
 def scrape_erpc_website():
     """Scrape the ERPC website for DSA data"""
@@ -223,7 +190,7 @@ def download_file(url, filename):
         resp = requests.get(url, timeout=60, stream=True, verify=True)
         resp.raise_for_status()
         
-        file_path = os.path.join(TEMP_DIR, filename)
+        file_path = os.path.join(ERLDC_DIR, filename)
         with open(file_path, 'wb') as f:
             for chunk in resp.iter_content(chunk_size=8192):
                 f.write(chunk)
@@ -370,48 +337,10 @@ def save_processed_data(processed_data, original_filename):
         logging.error(f"❌ Error saving processed data: {e}")
         return None
 
-def check_for_changes(file_info, tracking_data):
-    """Check if file has changed"""
-    filename = file_info['href']
-    current_hash = None
-    
-    # Check in all possible directories for existing file
-    possible_paths = [
-        os.path.join(DOWNLOAD_DIR, filename),
-        os.path.join(ERLDC_DIR, filename),
-        os.path.join(NRLDC_DIR, filename)
-    ]
-    
-    local_path = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            local_path = path
-            break
-    
-    if local_path:
-        current_hash = get_file_hash(local_path)
-    
-    # Check if file has changed
-    if filename in tracking_data:
-        if current_hash and tracking_data[filename]['hash'] == current_hash:
-            logging.info(f"📋 No changes detected in: {filename}")
-            return False
-        else:
-            logging.info(f"🔄 Change detected in: {filename}")
-            return True
-    else:
-        logging.info(f"🆕 New file detected: {filename}")
-        return True
-
 def download_and_process_file(file_info, data_type):
     """Download and process a single file"""
     filename = file_info['href']
     url = file_info['url']
-    
-    # Check for changes
-    tracking_data = load_file_tracking()
-    if not check_for_changes(file_info, tracking_data):
-        return True
     
     # Download file
     file_path = download_file(url, filename)
@@ -424,29 +353,13 @@ def download_and_process_file(file_info, data_type):
         if processed_data:
             output_path = save_processed_data(processed_data, filename)
             if output_path:
-                # Update tracking
-                file_hash = get_file_hash(file_path)
-                if file_hash:
-                    tracking_data[filename] = {
-                        'hash': file_hash,
-                        'last_processed': datetime.now().isoformat(),
-                        'type': data_type,
-                        'url': url
-                    }
-                    save_file_tracking(tracking_data)
                 return True
-    
-    # Clean up temp file
-    try:
-        os.remove(file_path)
-    except:
-        pass
     
     return False
 
-def scheduled_update():
-    """Run scheduled update"""
-    logging.info("🕐 Starting scheduled ERPC data update...")
+def run_update():
+    """Run ERPC data update"""
+    logging.info("🔄 Starting ERPC data update...")
     
     try:
         # Scrape website
@@ -461,63 +374,26 @@ def scheduled_update():
                     if download_and_process_file(file_info, data_type):
                         total_processed += 1
         
-        logging.info(f"✅ Scheduled update completed. Processed {total_processed} files.")
+        logging.info(f"✅ Update completed. Processed {total_processed} files.")
         
     except Exception as e:
-        logging.error(f"❌ Error in scheduled update: {e}")
-
-def start_scheduler():
-    """Start the scheduler to run updates automatically"""
-    logging.info("Starting automated scheduler for ERPC data extraction...")
-    
-    # Schedule the job to run once per week (Monday at 9:00 AM)
-    schedule.every().monday.at("09:00").do(scheduled_update)
-    
-    # Also run once immediately when started
-    schedule.every().day.at("09:00").do(scheduled_update)
-    
-    logging.info("Scheduler started. Updates will run:")
-    logging.info("- Every Monday at 9:00 AM (weekly check)")
-    logging.info("- Daily at 9:00 AM (for immediate updates)")
-    logging.info("- Press Ctrl+C to stop the scheduler.")
-    
-    try:
-        while True:
-            schedule.run_pending()
-            time.sleep(60)  # Check every minute
-    except KeyboardInterrupt:
-        logging.info("Scheduler stopped by user.")
-    except Exception as e:
-        logging.error(f"Scheduler error: {e}")
-
-def run_manual_update():
-    """Run manual update"""
-    logging.info("🔄 Starting manual ERPC data update...")
-    scheduled_update()
-    logging.info("✅ Manual update completed.")
+        logging.error(f"❌ Error in update: {e}")
 
 def main():
     """Main function"""
     if len(sys.argv) > 1:
-        if sys.argv[1] == '--schedule':
-            setup_directories()
-            start_scheduler()
-        elif sys.argv[1] == '--update':
-            setup_directories()
-            return run_manual_update()
-        elif sys.argv[1] == '--help':
+        if sys.argv[1] == '--help':
             print("ERPC Data Extractor Usage:")
-            print("  python erpc_extractor.py --update    # Run manual update")
-            print("  python erpc_extractor.py --schedule  # Start automated scheduler")
-            print("  python erpc_extractor.py --help      # Show this help")
+            print("  python erpc_extractor.py          # Run data extraction")
+            print("  python erpc_extractor.py --help   # Show this help")
             return
         else:
             print("Unknown argument. Use --help for usage information.")
             return
-    else:
-        # Default: run manual update
-        setup_directories()
-        return run_manual_update()
+    
+    # Run data extraction
+    setup_directories()
+    run_update()
 
 if __name__ == "__main__":
     main()
