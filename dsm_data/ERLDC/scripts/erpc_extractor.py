@@ -55,42 +55,25 @@ def download_dsm_blockwise_files():
             
             # Check if it's a DSM blockwise data file
             if 'DSM_Blockwise_Data_' in href or 'DSM_Blockwise_Data_' in text:
-                # Find the report title/date from the table structure
-                # Look for the table row containing this link
-                table_row = link.find_parent('tr')
-                publication_date = None
+                # Download the file first to check its actual publish date
+                full_url = urljoin(ERPC_BASE_URL, href)
                 
-                if table_row:
-                    # Look for table cells that contain report titles with dates
-                    for cell in table_row.find_all('td'):
-                        cell_text = cell.get_text(strip=True)
-                        if 'DSM' in cell_text and ('period from' in cell_text or 'Accounts' in cell_text):
-                            # Extract date from text like "period from 28.07.2025 to 03.08.2025"
-                            import re
-                            date_match = re.search(r'period from (\d{2}\.\d{2}\.\d{4})', cell_text)
-                            if date_match:
-                                publication_date = date_match.group(1)
-                                break
-                
-                if publication_date:
-                    try:
-                        # Parse the publication date (format: DD.MM.YYYY)
-                        pub_date = datetime.strptime(publication_date, '%d.%m.%Y')
-                        days_since_publication = (current_date - pub_date).days
-                        
-                        if days_since_publication > 7:
-                            logging.info(f"⏭️ Report published on {publication_date} ({days_since_publication} days ago) - skipping (older than 7 days)")
-                            continue
-                        else:
-                            logging.info(f"✅ Report published on {publication_date} ({days_since_publication} days ago) - downloading")
-                            # Download the file
-                            full_url = urljoin(ERPC_BASE_URL, href)
-                            
+                try:
+                    logging.info(f"📥 Checking file: {text} -> {full_url}")
+                    
+                    file_response = session.get(full_url, timeout=30, verify=False)
+                    if file_response.status_code == 200 and len(file_response.content) > 1000:
+                        # Check the file's actual publish date from HTTP headers
+                        last_modified = file_response.headers.get('Last-Modified')
+                        if last_modified:
                             try:
-                                logging.info(f"📥 Downloading file: {text} -> {full_url}")
+                                from email.utils import parsedate_to_datetime
+                                file_date = parsedate_to_datetime(last_modified)
+                                days_old = (current_date - file_date).days
                                 
-                                file_response = session.get(full_url, timeout=30, verify=False)
-                                if file_response.status_code == 200 and len(file_response.content) > 1000:
+                                if days_old <= 7:
+                                    logging.info(f"✅ File published {days_old} days ago - downloading")
+                                    
                                     # Extract filename from URL or use text
                                     if href.endswith(('.xlsx', '.xls', '.csv')):
                                         filename = os.path.basename(urlparse(href).path)
@@ -107,15 +90,52 @@ def download_dsm_blockwise_files():
                                         'filename': filename,
                                         'text': text
                                     })
-                                    
-                            except Exception as e:
-                                logging.error(f"❌ Error downloading {text}: {e}")
-                                continue
-                    except ValueError:
-                        logging.warning(f"⚠️ Could not parse publication date '{publication_date}', skipping")
-                        continue
-                else:
-                    logging.info("⚠️ No publication date found in webpage, skipping")
+                                else:
+                                    logging.info(f"⏭️ File published {days_old} days ago - skipping (older than 7 days)")
+                                    continue
+                            except:
+                                # If we can't parse the date, assume it's recent and download
+                                logging.info("⚠️ Could not parse file publish date, downloading anyway")
+                                
+                                # Extract filename from URL or use text
+                                if href.endswith(('.xlsx', '.xls', '.csv')):
+                                    filename = os.path.basename(urlparse(href).path)
+                                else:
+                                    filename = f"DSM_Blockwise_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                                
+                                file_path = os.path.join(ERPC_DIR, filename)
+                                with open(file_path, 'wb') as f:
+                                    f.write(file_response.content)
+                                
+                                logging.info(f"✅ Successfully downloaded: {filename} ({len(file_response.content)} bytes)")
+                                downloaded_files.append({
+                                    'url': full_url,
+                                    'filename': filename,
+                                    'text': text
+                                })
+                        else:
+                            # No last-modified header, assume it's recent and download
+                            logging.info("⚠️ No publish date found in headers, downloading anyway")
+                            
+                            # Extract filename from URL or use text
+                            if href.endswith(('.xlsx', '.xls', '.csv')):
+                                filename = os.path.basename(urlparse(href).path)
+                            else:
+                                filename = f"DSM_Blockwise_Data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            
+                            file_path = os.path.join(ERPC_DIR, filename)
+                            with open(file_path, 'wb') as f:
+                                f.write(file_response.content)
+                            
+                            logging.info(f"✅ Successfully downloaded: {filename} ({len(file_response.content)} bytes)")
+                            downloaded_files.append({
+                                'url': full_url,
+                                'filename': filename,
+                                'text': text
+                            })
+                        
+                except Exception as e:
+                    logging.error(f"❌ Error downloading {text}: {e}")
                     continue
         
         return downloaded_files
