@@ -261,49 +261,82 @@ def download_from_wrpc_website():
                 test_date = current_date - timedelta(days=days_back)
                 date_str = test_date.strftime('%d%m%Y')
                 
-                # Try different file extensions
-                file_extensions = ['sum4.zip', 'sum3a.zip', 'sum3.zip', 'sum2.zip', 'sum1.zip']
+                # Smart approach: Scrape website to find actual file timestamps
+                logging.info(f"🔍 Smart scraping for actual file timestamps on {date_str}...")
                 
-                # Try 30-minute intervals (every 30 minutes throughout the day)
-                logging.info(f"🔍 Trying 30-minute intervals for {date_str}...")
-                
-                for hour in range(24):
-                    for minute in [0, 30]:  # Every 30 minutes (00 and 30)
-                        time_str = f"{hour:02d}{minute:02d}000000"
-                        
-                        for extension in file_extensions:
-                            test_filename = f"{date_str}{time_str}{extension}"
-                            test_url = f"{WRPC_BASE_URL}/allfile/{test_filename}"
-                            
-                            try:
-                                logging.debug(f"🔍 Testing: {test_url}")
-                                file_response = session.get(test_url, timeout=5, verify=True)
-                                
-                                if file_response.status_code == 200 and len(file_response.content) > 1000:
-                                    file_path = os.path.join(WRPC_DATA_DIR, test_filename)
-                                    with open(file_path, 'wb') as f:
-                                        f.write(file_response.content)
-                                    
-                                    logging.info(f"✅ Successfully downloaded: {test_filename} ({len(file_response.content)} bytes)")
-                                    downloaded_files.append(file_path)
-                                    process_zip_file(file_path)
-                                    
-                                    # Learn this successful pattern for future use
-                                    save_successful_pattern(f"{time_str}{extension}")
-                                    
-                                    break  # Found one file for this date, move to next date
-                                    
-                            except Exception as e:
-                                logging.debug(f"⚠️ Failed to access {test_url}: {e}")
-                                continue
-                        
-                        # If we found a file for this time, break out of time loop
-                        if any(f"{date_str}{time_str}" in f for f in downloaded_files):
-                            break
+                # Try to access the DSM page to find actual files
+                try:
+                    logging.info(f"🌐 Accessing WRPC website to find actual files...")
+                    response = session.get(WRPC_DSM_URL, timeout=30, verify=True)
                     
-                    # If we found a file for this date, break out of date loop
-                    if any(f"{date_str}" in f for f in downloaded_files):
-                        break
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        
+                        # Look for any ZIP files with our date pattern
+                        found_files = []
+                        for link in soup.find_all('a', href=True):
+                            href = link['href']
+                            if '.zip' in href.lower() and date_str in href:
+                                found_files.append(href)
+                                logging.info(f"🎯 Found file with date {date_str}: {href}")
+                        
+                        # Also check page content for file patterns
+                        content_text = response.text
+                        import re
+                        
+                        # Look for ZIP file patterns in the page content
+                        zip_patterns = re.findall(rf'{date_str}\d{{8,14}}\.zip', content_text)
+                        for pattern in zip_patterns:
+                            if pattern not in found_files:
+                                found_files.append(pattern)
+                                logging.info(f"🎯 Found file pattern in content: {pattern}")
+                        
+                        # Download found files
+                        for file_pattern in found_files:
+                            # Extract the actual timestamp from the filename
+                            if date_str in file_pattern:
+                                # Try different URL paths for the file
+                                possible_urls = [
+                                    f"{WRPC_BASE_URL}/allfile/{file_pattern}",
+                                    f"{WRPC_BASE_URL}/uploads/{file_pattern}",
+                                    f"{WRPC_BASE_URL}/files/{file_pattern}",
+                                    f"{WRPC_BASE_URL}/data/{file_pattern}"
+                                ]
+                                
+                                for url in possible_urls:
+                                    try:
+                                        logging.debug(f"🔍 Testing found file: {url}")
+                                        file_response = session.get(url, timeout=10, verify=True)
+                                        
+                                        if file_response.status_code == 200 and len(file_response.content) > 1000:
+                                            file_path = os.path.join(WRPC_DATA_DIR, file_pattern)
+                                            with open(file_path, 'wb') as f:
+                                                f.write(file_response.content)
+                                            
+                                            logging.info(f"✅ Successfully downloaded: {file_pattern} ({len(file_response.content)} bytes)")
+                                            downloaded_files.append(file_path)
+                                            process_zip_file(file_path)
+                                            
+                                            # Learn this successful pattern for future use
+                                            save_successful_pattern(file_pattern.replace(date_str, ''))
+                                            
+                                            break  # Found this file, try next one
+                                            
+                                    except Exception as e:
+                                        logging.debug(f"⚠️ Failed to access {url}: {e}")
+                                        continue
+                        
+                        if found_files:
+                            logging.info(f"🎯 Found {len(found_files)} files with date {date_str}")
+                        else:
+                            logging.info(f"📭 No files found with date {date_str} on website")
+                    
+                except Exception as e:
+                    logging.warning(f"⚠️ Error scraping website: {e}")
+                
+                # If we found files for this date, move to next date
+                if any(f"{date_str}" in f for f in downloaded_files):
+                    break
         
         if downloaded_files:
             logging.info(f"✅ Successfully downloaded {len(downloaded_files)} files")
