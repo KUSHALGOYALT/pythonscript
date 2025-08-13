@@ -28,7 +28,6 @@ logging.basicConfig(
 # Configuration
 ERPC_BASE_URL = "https://erpc.gov.in"
 ERPC_DSA_URL = "https://erpc.gov.in/ui-and-deviation-accts/"
-ERPC_SPECIFIC_FILE = "https://erpc.gov.in/wp-content/uploads/2025/08/DSM_Blockwise_Data_2025-07-21-2025-07-27.xlsx"
 DOWNLOAD_DIR = "dsm_data"
 ERLDC_DIR = "dsm_data/ERLDC"
 
@@ -54,17 +53,6 @@ def scrape_erpc_website():
     
     categorized_files = {data_type: [] for data_type in DATA_TYPES.keys()}
     categorized_files['OTHER'] = []
-    
-    # First, add the specific DSM file
-    specific_filename = "DSM_Blockwise_Data_2025-07-21-2025-07-27.xlsx"
-    specific_file_info = {
-        'href': specific_filename,
-        'text': 'DSM Blockwise Data (2025-07-21 to 2025-07-27)',
-        'url': ERPC_SPECIFIC_FILE,
-        'type': 'excel'
-    }
-    categorized_files['DSA'].append(specific_file_info)
-    logging.info(f"🎯 Added specific DSM file: {specific_filename}")
     
     try:
         logging.info(f"Accessing: {ERPC_DSA_URL}")
@@ -180,6 +168,14 @@ def scrape_erpc_website():
     for data_type, files in categorized_files.items():
         if files:
             logging.info(f"📁 {data_type}: {len(files)} files")
+    
+    # Validate that we found some files
+    if total_files == 0:
+        logging.warning("⚠️ No files found on ERPC website. This might indicate:")
+        logging.warning("   - Website structure has changed")
+        logging.warning("   - Network connectivity issues")
+        logging.warning("   - No DSM data is currently available")
+        logging.warning("   - Website is temporarily down")
     
     return categorized_files
 

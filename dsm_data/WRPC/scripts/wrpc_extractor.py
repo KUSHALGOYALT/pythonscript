@@ -28,7 +28,6 @@ logging.basicConfig(
 # Configuration
 WRPC_BASE_URL = "https://www.wrpc.gov.in"
 WRPC_DSM_URL = "https://www.wrpc.gov.in/menu/DSMUI%20Account%20_342"
-WRPC_SAMPLE_FILE = "https://www.wrpc.gov.in/allfile/070820251025026574sum4c.zip"
 DOWNLOAD_DIR = "dsm_data"
 WRPC_DIR = "dsm_data/WRPC"
 
@@ -53,17 +52,6 @@ def scrape_wrpc_website():
     
     categorized_files = {data_type: [] for data_type in DATA_TYPES.keys()}
     categorized_files['OTHER'] = []
-    
-    # First, add the sample DSM file
-    sample_filename = "070820251025026574sum4c.zip"
-    sample_file_info = {
-        'href': sample_filename,
-        'text': 'WRPC DSM UI Account Data Sample',
-        'url': WRPC_SAMPLE_FILE,
-        'type': 'zip'
-    }
-    categorized_files['DSM'].append(sample_file_info)
-    logging.info(f"🎯 Added sample WRPC DSM file: {sample_filename}")
     
     try:
         logging.info(f"Accessing: {WRPC_DSM_URL}")
@@ -155,6 +143,14 @@ def scrape_wrpc_website():
         for data_type, files in categorized_files.items():
             if files:
                 logging.info(f"  - {data_type}: {len(files)} files")
+        
+        # Validate that we found some files
+        if total_files == 0:
+            logging.warning("⚠️ No files found on WRPC website. This might indicate:")
+            logging.warning("   - Website structure has changed")
+            logging.warning("   - Network connectivity issues")
+            logging.warning("   - No DSM data is currently available")
+            logging.warning("   - Website is temporarily down")
         
         return categorized_files
         
