@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-
-
 import os
 import glob
 import logging
@@ -9,11 +7,9 @@ import zipfile
 import re
 import csv
 from datetime import datetime, timedelta
-from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -23,13 +19,11 @@ logging.basicConfig(
     ]
 )
 
-# Constants
 WRPC_DATA_DIR = "../data"
 OUTPUT_DIR = "../data"
 WRPC_BASE_URL = "https://www.wrpc.gov.in"
 WRPC_DSM_URL = "https://www.wrpc.gov.in/menu/DSMUI%20Account%20_342"
 
-# Browser-like headers for web requests
 BROWSER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -45,20 +39,17 @@ BROWSER_HEADERS = {
 }
 
 def create_directories():
-    """Create necessary directories"""
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     os.makedirs(WRPC_DATA_DIR, exist_ok=True)
     logging.info(f"✅ Created directory: {OUTPUT_DIR}")
     logging.info(f"✅ Created directory: {WRPC_DATA_DIR}")
 
 def get_session():
-    """Create and configure a requests session with browser-like behavior"""
     session = requests.Session()
     session.headers.update(BROWSER_HEADERS)
     return session
 
 def load_learned_patterns():
-    """Load previously successful time patterns"""
     pattern_file = os.path.join(WRPC_DATA_DIR, "successful_patterns.txt")
     patterns = []
     
@@ -73,25 +64,20 @@ def load_learned_patterns():
     return patterns
 
 def save_successful_pattern(pattern):
-    """Save a successful time pattern for future use"""
     try:
         pattern_file = os.path.join(WRPC_DATA_DIR, "successful_patterns.txt")
         
-        # Read existing patterns
         existing_patterns = []
         if os.path.exists(pattern_file):
             with open(pattern_file, 'r') as f:
                 existing_patterns = [line.strip() for line in f.readlines() if line.strip()]
         
-        # Add new pattern if not already present
         if pattern not in existing_patterns:
             existing_patterns.append(pattern)
             
-            # Keep only the most recent 50 patterns to avoid file bloat
             if len(existing_patterns) > 50:
                 existing_patterns = existing_patterns[-50:]
             
-            # Save updated patterns
             with open(pattern_file, 'w') as f:
                 for p in existing_patterns:
                     f.write(f"{p}\n")
@@ -102,45 +88,37 @@ def save_successful_pattern(pattern):
         logging.debug(f"Could not save pattern: {e}")
 
 def generate_dynamic_time_patterns():
-    """Generate dynamic time patterns based on learned patterns and common intervals"""
     patterns = []
     
-    # Load previously successful patterns (highest priority)
     learned_patterns = load_learned_patterns()
     
-    # Add learned patterns first
     if learned_patterns:
         for pattern in learned_patterns:
-            if len(pattern) >= 14:  # Full timestamp
+            if len(pattern) >= 14:
                 patterns.append(pattern)
-            elif len(pattern) >= 8:  # Date only, generate common times
+            elif len(pattern) >= 8:
                 patterns.extend(generate_common_times_for_date(pattern))
     
-    # Generate systematic time patterns if no learned patterns
     if not patterns:
         patterns = generate_systematic_time_patterns()
     
     return patterns
 
 def generate_common_times_for_date(date_pattern):
-    """Generate time patterns for every minute of the day"""
     times = []
     
-    # Generate patterns for every minute of the day (1440 patterns)
     for hour in range(24):
-        for minute in range(60):  # Every minute
+        for minute in range(60):
             time_str = f"{hour:02d}{minute:02d}000000"
             times.append(f"{date_pattern}{time_str}")
     
     return times
 
 def generate_systematic_time_patterns():
-    """Generate systematic time patterns covering every minute of the day"""
     patterns = []
     
-    # Generate patterns for every minute of the day (1440 patterns)
     for hour in range(24):
-        for minute in range(60):  # Every minute
+        for minute in range(60):
             patterns.append(f"{hour:02d}{minute:02d}000000")
     
     return patterns
@@ -286,81 +264,46 @@ def download_from_wrpc_website():
                 # Try different file extensions
                 file_extensions = ['sum4.zip', 'sum3a.zip', 'sum3.zip', 'sum2.zip', 'sum1.zip']
                 
-                # Try the known working pattern first (16:52:51.5241)
-                # This pattern works: 120820251652515241sum4.zip
-                known_time = "1652515241"  # 16:52:51.5241
+                # Try 30-minute intervals (every 30 minutes throughout the day)
+                logging.info(f"🔍 Trying 30-minute intervals for {date_str}...")
                 
-                for extension in file_extensions:
-                    test_filename = f"{date_str}{known_time}{extension}"
-                    test_url = f"{WRPC_BASE_URL}/allfile/{test_filename}"
-                    
-                    try:
-                        logging.info(f"🔍 Testing known pattern: {test_url}")
-                        file_response = session.get(test_url, timeout=5, verify=True)
+                for hour in range(24):
+                    for minute in [0, 30]:  # Every 30 minutes (00 and 30)
+                        time_str = f"{hour:02d}{minute:02d}000000"
                         
-                        if file_response.status_code == 200 and len(file_response.content) > 1000:
-                            file_path = os.path.join(WRPC_DATA_DIR, test_filename)
-                            with open(file_path, 'wb') as f:
-                                f.write(file_response.content)
+                        for extension in file_extensions:
+                            test_filename = f"{date_str}{time_str}{extension}"
+                            test_url = f"{WRPC_BASE_URL}/allfile/{test_filename}"
                             
-                            logging.info(f"✅ Successfully downloaded: {test_filename} ({len(file_response.content)} bytes)")
-                            downloaded_files.append(file_path)
-                            process_zip_file(file_path)
-                            
-                            # Learn this successful pattern for future use
-                            save_successful_pattern(f"{known_time}{extension}")
-                            
-                            break  # Found one file for this date, move to next date
-                            
-                    except Exception as e:
-                        logging.debug(f"⚠️ Failed to access {test_url}: {e}")
-                        continue
-                
-                # If we found a file for this date, break out of date loop
-                if any(f"{date_str}" in f for f in downloaded_files):
-                    break
-                
-                # If no file found with known pattern, try 30-minute intervals
-                if not any(f"{date_str}" in f for f in downloaded_files):
-                    logging.info(f"🔍 Trying 30-minute intervals for {date_str}...")
-                    
-                    for hour in range(24):
-                        for minute in [0, 30]:  # Every 30 minutes (00 and 30)
-                            time_str = f"{hour:02d}{minute:02d}000000"
-                            
-                            for extension in file_extensions:
-                                test_filename = f"{date_str}{time_str}{extension}"
-                                test_url = f"{WRPC_BASE_URL}/allfile/{test_filename}"
+                            try:
+                                logging.debug(f"🔍 Testing: {test_url}")
+                                file_response = session.get(test_url, timeout=5, verify=True)
                                 
-                                try:
-                                    logging.debug(f"🔍 Testing: {test_url}")
-                                    file_response = session.get(test_url, timeout=5, verify=True)
+                                if file_response.status_code == 200 and len(file_response.content) > 1000:
+                                    file_path = os.path.join(WRPC_DATA_DIR, test_filename)
+                                    with open(file_path, 'wb') as f:
+                                        f.write(file_response.content)
                                     
-                                    if file_response.status_code == 200 and len(file_response.content) > 1000:
-                                        file_path = os.path.join(WRPC_DATA_DIR, test_filename)
-                                        with open(file_path, 'wb') as f:
-                                            f.write(file_response.content)
-                                        
-                                        logging.info(f"✅ Successfully downloaded: {test_filename} ({len(file_response.content)} bytes)")
-                                        downloaded_files.append(file_path)
-                                        process_zip_file(file_path)
-                                        
-                                        # Learn this successful pattern for future use
-                                        save_successful_pattern(f"{time_str}{extension}")
-                                        
-                                        break  # Found one file for this date, move to next date
-                                        
-                                except Exception as e:
-                                    logging.debug(f"⚠️ Failed to access {test_url}: {e}")
-                                    continue
-                            
-                            # If we found a file for this time, break out of time loop
-                            if any(f"{date_str}{time_str}" in f for f in downloaded_files):
-                                break
+                                    logging.info(f"✅ Successfully downloaded: {test_filename} ({len(file_response.content)} bytes)")
+                                    downloaded_files.append(file_path)
+                                    process_zip_file(file_path)
+                                    
+                                    # Learn this successful pattern for future use
+                                    save_successful_pattern(f"{time_str}{extension}")
+                                    
+                                    break  # Found one file for this date, move to next date
+                                    
+                            except Exception as e:
+                                logging.debug(f"⚠️ Failed to access {test_url}: {e}")
+                                continue
                         
-                        # If we found a file for this date, break out of date loop
-                        if any(f"{date_str}" in f for f in downloaded_files):
+                        # If we found a file for this time, break out of time loop
+                        if any(f"{date_str}{time_str}" in f for f in downloaded_files):
                             break
+                    
+                    # If we found a file for this date, break out of date loop
+                    if any(f"{date_str}" in f for f in downloaded_files):
+                        break
         
         if downloaded_files:
             logging.info(f"✅ Successfully downloaded {len(downloaded_files)} files")
@@ -422,7 +365,7 @@ def download_from_wrpc_website():
                 # Save patterns for future reference using the new function
                 for pattern in successful_patterns:
                     save_successful_pattern(pattern)
-            
+          
             return True
         else:
             logging.warning("⚠️ No files were successfully downloaded")

@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
-
-import requests
-import pandas as pd
 import os
+import sys
 import logging
-import re
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
-import sys
-from pathlib import Path
+from openpyxl import load_workbook, Workbook
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,159 +18,200 @@ logging.basicConfig(
 )
 
 ERPC_BASE_URL = "https://erpc.gov.in"
-ERPC_DSA_URL = "https://erpc.gov.in/ui-and-deviation-accts/"
-DOWNLOAD_DIR = "dsm_data"
-ERLDC_DIR = "dsm_data/ERLDC"
-
-DATA_TYPES = {
-    'DSA': ['dsa', 'daily', 'scheduling', 'accounting', 'supporting'],
-    'REPORT': ['report', 'summary', 'analysis'],
-    'NOTIFICATION': ['notification', 'circular', 'order'],
-    'OTHER': ['other', 'misc']
-}
+ERPC_DIR = "../data"
 
 def setup_directories():
-    for directory in [DOWNLOAD_DIR, ERLDC_DIR]:
-        os.makedirs(directory, exist_ok=True)
-        logging.info(f"Created directory: {directory}")
+    os.makedirs(ERPC_DIR, exist_ok=True)
+    logging.info(f"✅ Created directory: {ERPC_DIR}")
 
-
+def try_download_historical_files():
+    logging.info("🔍 Trying to download historical files for past 7 days...")
+    
+    downloaded_files = []
+    current_date = datetime.now()
+    
+    for days_back in range(7):
+        test_date = current_date - timedelta(days=days_back)
+        date_str = test_date.strftime('%d%m%Y')
+        
+        file_patterns = [
+            f"ERPC_DSM_{date_str}.xlsx",
+            f"ERPC_DSM_{date_str}.xls",
+            f"ERPC_UI_{date_str}.xlsx",
+            f"ERPC_UI_{date_str}.xls",
+            f"ERPC_Deviation_{date_str}.xlsx",
+            f"ERPC_Deviation_{date_str}.xls",
+            f"DSM_{date_str}.xlsx",
+            f"DSM_{date_str}.xls",
+            f"UI_{date_str}.xlsx",
+            f"UI_{date_str}.xls"
+        ]
+        
+        for filename in file_patterns:
+            possible_urls = [
+                f"{ERPC_BASE_URL}/uploads/{filename}",
+                f"{ERPC_BASE_URL}/en/ui-and-deviation-accts/{filename}",
+                f"{ERPC_BASE_URL}/files/{filename}",
+                f"{ERPC_BASE_URL}/data/{filename}"
+            ]
+            
+            for url in possible_urls:
+                try:
+                    logging.debug(f"🔍 Testing: {url}")
+                    response = requests.get(url, timeout=10, verify=True)
+                    
+                    if response.status_code == 200 and len(response.content) > 1000:
+                        file_path = os.path.join(ERPC_DIR, filename)
+                        with open(file_path, 'wb') as f:
+                            f.write(response.content)
+                        
+                        logging.info(f"✅ Successfully downloaded: {filename} ({len(response.content)} bytes)")
+                        downloaded_files.append({
+                            'url': url,
+                            'filename': filename,
+                            'type': 'excel' if filename.endswith(('.xlsx', '.xls')) else 'csv'
+                        })
+                        break
+                        
+                except Exception as e:
+                    logging.debug(f"⚠️ Failed to access {url}: {e}")
+                    continue
+            
+            if any(f"{date_str}" in f['filename'] for f in downloaded_files):
+                break
+    
+    return downloaded_files
 
 def scrape_erpc_website():
-    logging.info("🔍 Scraping ERPC website for DSA data...")
-    
-    categorized_files = {data_type: [] for data_type in DATA_TYPES.keys()}
-    categorized_files['OTHER'] = []
+    """Scrape the ERPC website for data files"""
+    logging.info("🌐 Scraping ERPC website...")
     
     try:
-        logging.info(f"Accessing: {ERPC_DSA_URL}")
-        resp = requests.get(ERPC_DSA_URL, timeout=30, verify=True)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        # Get the main page
+        response = requests.get(ERPC_BASE_URL, timeout=30)
+        response.raise_for_status()
         
-        for a in soup.find_all("a", href=True):
-            href = a['href']
-            text = a.get_text(strip=True)
-            
-            if href.lower().endswith(('.xls', '.xlsx')):
-                full_url = urljoin(ERPC_DSA_URL, href)
-                
-                file_info = {
-                    'href': href,
-                    'text': text,
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Look for uploads directory
+        uploads_links = []
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            if 'uploads' in href and any(ext in href.lower() for ext in ['.xlsx', '.xls', '.csv']):
+                full_url = urljoin(ERPC_BASE_URL, href)
+                uploads_links.append({
                     'url': full_url,
-                    'type': 'excel'
-                }
-                
-                if 'wp-content/uploads' in href:
-                    categorized_files['DSA'].append(file_info)
-                    logging.info(f"🎯 Found Excel file in uploads: {text} -> {href}")
-                else:
-                    categorized_files['OTHER'].append(file_info)
-                    logging.info(f"🎯 Found Excel file: {text} -> {href}")
-                    
-            elif href == '#' or href.startswith('javascript:'):
-                logging.debug(f"🔗 Found JavaScript link: {text}")
-            elif href.lower().endswith('.pdf'):
-                logging.debug(f"⏭️ Skipping PDF file: {href}")
-            else:
-                logging.debug(f"📄 Found non-file link: {href}")
+                    'href': href,
+                    'text': link.get_text(strip=True),
+                    'type': 'excel' if href.endswith(('.xlsx', '.xls')) else 'csv'
+                })
+                logging.info(f"🎯 Found Excel file in uploads: {link.get_text(strip=True)} -> {full_url}")
         
-        for a in soup.find_all("a", href=True):
-            href = a['href']
-            text = a.get_text(strip=True)
-            
-            if not href.lower().endswith(('.xls', '.xlsx', '.pdf', '.zip')) and not href.startswith('#'):
-                sub_url = urljoin(ERPC_DSA_URL, href)
-                logging.info(f"🔍 Found potential subdirectory: {text} -> {sub_url}")
+        # Categorize files
+        categorized_files = {
+            'excel': uploads_links,
+            'csv': []
+        }
+        
+        # Also check subdirectories
+        subdirs = ['/en/ui-and-deviation-accts/', '/uploads/']
+        for subdir in subdirs:
+            try:
+                sub_url = urljoin(ERPC_BASE_URL, subdir)
+                logging.info(f"🔍 Found potential subdirectory: {link.get_text(strip=True)} -> {sub_url}")
                 
-                try:
-                    sub_resp = requests.get(sub_url, timeout=30, verify=True)
-                    sub_resp.raise_for_status()
-                    sub_soup = BeautifulSoup(sub_resp.text, "html.parser")
+                sub_resp = requests.get(sub_url, timeout=30, verify=True)
+                if sub_resp.status_code == 200:
+                    sub_soup = BeautifulSoup(sub_resp.content, 'html.parser')
                     
-                    for sub_a in sub_soup.find_all("a", href=True):
-                        sub_href = sub_a['href']
-                        sub_text = sub_a.get_text(strip=True)
-                        
-                        if sub_href.lower().endswith(('.xls', '.xlsx')):
-                            sub_full_url = urljoin(sub_url, sub_href)
+                    for link in sub_soup.find_all('a', href=True):
+                        href = link['href']
+                        if any(ext in href.lower() for ext in ['.xlsx', '.xls', '.csv']):
+                            full_url = urljoin(sub_url, href)
+                            categorized_files['excel'].append({
+                                'url': full_url,
+                                'href': href,
+                                'text': link.get_text(strip=True),
+                                'type': 'excel' if href.endswith(('.xlsx', '.xls')) else 'csv'
+                            })
+                            logging.info(f"🎯 Found Excel file in subdirectory: {link.get_text(strip=True)} -> {full_url}")
                             
-                            file_info = {
-                                'href': sub_href,
-                                'text': sub_text,
-                                'url': sub_full_url,
-                                'type': 'excel'
-                            }
-                            
-                            categorized_files['DSA'].append(file_info)
-                            logging.info(f"🎯 Found Excel file in subdirectory: {sub_text} -> {sub_href}")
-                        elif sub_href.lower().endswith('.pdf'):
-                            logging.debug(f"⏭️ Skipping PDF file in subdirectory: {sub_href}")
-                            
-                except Exception as e:
-                    logging.warning(f"⚠️ Error accessing subdirectory {sub_url}: {e}")
-                    continue
-                    
-    except requests.RequestException as e:
-        logging.error(f"❌ Error accessing ERPC website: {e}")
+            except Exception as e:
+                logging.debug(f"⚠️ Error checking subdirectory {subdir}: {e}")
+                continue
+        
+        return categorized_files
+        
     except Exception as e:
-        logging.error(f"❌ Unexpected error: {e}")
-    
-    total_files = sum(len(files) for files in categorized_files.values())
-    logging.info(f"📊 Total files found: {total_files}")
-    for data_type, files in categorized_files.items():
-        if files:
-            logging.info(f"📁 {data_type}: {len(files)} files")
-    
-    if total_files == 0:
-        logging.warning("⚠️ No files found on ERPC website. This might indicate:")
-        logging.warning("   - Website structure has changed")
-        logging.warning("   - Network connectivity issues")
-        logging.warning("   - No DSM data is currently available")
-        logging.warning("   - Website is temporarily down")
-    
-    return categorized_files
+        logging.error(f"❌ Error scraping ERPC website: {e}")
+        return {'excel': [], 'csv': []}
 
 def download_file(url, filename):
+    """Download a file from URL"""
     try:
-        logging.info(f"Downloading: {url}")
-        resp = requests.get(url, timeout=60, stream=True, verify=True)
-        resp.raise_for_status()
+        logging.info(f"📥 Downloading: {filename}")
         
-        file_path = os.path.join(ERLDC_DIR, filename)
+        response = requests.get(url, timeout=30, stream=True)
+        response.raise_for_status()
+        
+        # Extract just the filename from the URL if a full URL is passed
+        if filename.startswith('http'):
+            from urllib.parse import urlparse
+            filename = os.path.basename(urlparse(filename).path)
+        
+        file_path = os.path.join(ERPC_DIR, filename)
+        
         with open(file_path, 'wb') as f:
-            for chunk in resp.iter_content(chunk_size=8192):
+            for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         
         logging.info(f"✅ Downloaded: {filename}")
         return file_path
+        
     except Exception as e:
-        logging.error(f"❌ Error downloading {url}: {e}")
+        logging.error(f"❌ Error downloading {filename}: {e}")
         return None
 
-def process_excel_file(file_path, original_filename):
+def process_excel_file(file_path, filename):
+    """Process Excel file using openpyxl"""
     try:
-        logging.info(f"Processing Excel file: {original_filename}")
+        logging.info(f"📊 Processing Excel file: {filename}")
         
-        excel_file = pd.ExcelFile(file_path)
-        sheet_names = excel_file.sheet_names
+        # Load workbook
+        workbook = load_workbook(file_path, data_only=True)
+        sheet_names = workbook.sheetnames
         logging.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
         
         processed_data = {}
         for sheet_name in sheet_names:
             try:
                 logging.info(f"Reading sheet: {sheet_name}")
-                df = pd.read_excel(file_path, sheet_name=sheet_name)
+                worksheet = workbook[sheet_name]
                 
-                if not df.empty:
-                    df.columns = df.columns.str.strip()
+                # Convert worksheet to list of lists
+                data = []
+                for row in worksheet.iter_rows(values_only=True):
+                    if any(cell is not None for cell in row):  # Skip completely empty rows
+                        data.append(row)
+                
+                if data:
+                    # Find the last non-empty column
+                    max_col = 0
+                    for row in data:
+                        for i, cell in enumerate(row):
+                            if cell is not None:
+                                max_col = max(max_col, i)
                     
-                    df = df.dropna(how='all').dropna(axis=1, how='all')
+                    # Clean data - remove empty rows and columns
+                    cleaned_data = []
+                    for row in data:
+                        if any(cell is not None for cell in row[:max_col+1]):
+                            cleaned_row = [str(cell).strip() if cell is not None else '' for cell in row[:max_col+1]]
+                            cleaned_data.append(cleaned_row)
                     
-                    if not df.empty:
-                        processed_data[sheet_name] = df
-                        logging.info(f"✅ Processed sheet '{sheet_name}' with {len(df)} rows")
+                    if cleaned_data:
+                        processed_data[sheet_name] = cleaned_data
+                        logging.info(f"✅ Processed sheet '{sheet_name}' with {len(cleaned_data)} rows")
                     else:
                         logging.warning(f"⚠️ Sheet '{sheet_name}' is empty after cleaning")
                 else:
@@ -190,23 +228,37 @@ def process_excel_file(file_path, original_filename):
         return None
 
 def save_processed_data(processed_data, original_filename):
+    """Save processed data to Excel file using openpyxl"""
     if not processed_data:
         logging.warning("No data to save")
         return None
     
     try:
-        target_dir = ERLDC_DIR
+        target_dir = ERPC_DIR
         logging.info(f"📁 Saving ERPC data to: {target_dir}")
         
         base_name = os.path.splitext(original_filename)[0]
         output_filename = f"{base_name}_processed.xlsx"
         output_path = os.path.join(target_dir, output_filename)
         
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            for sheet_name, df in processed_data.items():
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-                logging.info(f"💾 Saved sheet '{sheet_name}' with {len(df)} rows")
+        # Create new workbook
+        workbook = Workbook()
+        # Remove default sheet
+        workbook.remove(workbook.active)
         
+        for sheet_name, data in processed_data.items():
+            # Create new sheet
+            worksheet = workbook.create_sheet(title=sheet_name[:31])  # Excel sheet name limit
+            
+            # Write data to sheet
+            for row_idx, row_data in enumerate(data, 1):
+                for col_idx, cell_value in enumerate(row_data, 1):
+                    worksheet.cell(row=row_idx, column=col_idx, value=cell_value)
+            
+            logging.info(f"💾 Saved sheet '{sheet_name}' with {len(data)} rows")
+        
+        # Save workbook
+        workbook.save(output_path)
         logging.info(f"✅ Saved processed data to: {output_path}")
         return output_path
         
@@ -215,8 +267,10 @@ def save_processed_data(processed_data, original_filename):
         return None
 
 def download_and_process_file(file_info, data_type):
-    filename = file_info['href']
+    # Extract proper filename from URL
+    from urllib.parse import urlparse
     url = file_info['url']
+    filename = os.path.basename(urlparse(url).path)
     
     file_path = download_file(url, filename)
     if not file_path:
@@ -235,9 +289,19 @@ def run_update():
     logging.info("🔄 Starting ERPC data update...")
     
     try:
+        total_processed = 0
+        
+        # First, try to download historical files for past 7 days
+        historical_files = try_download_historical_files()
+        if historical_files:
+            logging.info(f"📥 Downloaded {len(historical_files)} historical files")
+            for file_info in historical_files:
+                if download_and_process_file(file_info, file_info['type']):
+                    total_processed += 1
+        
+        # Then scrape current website for additional files
         categorized_files = scrape_erpc_website()
         
-        total_processed = 0
         for data_type, files in categorized_files.items():
             if files:
                 logging.info(f"Processing {data_type} files...")
