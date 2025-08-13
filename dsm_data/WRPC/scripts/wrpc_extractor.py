@@ -1,341 +1,477 @@
 #!/usr/bin/env python3
+"""
+WRPC (Western Regional Power Committee) Data Extractor
+Dynamically extracts and processes DSM (Demand Side Management) data from CSV files.
+Can also download fresh data from the WRPC website.
+"""
 
 import os
-import sys
+import glob
 import logging
-import requests
 import pandas as pd
-from datetime import datetime
-from urllib.parse import urljoin
-from bs4 import BeautifulSoup
+import requests
 import zipfile
-import io
+import re
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
 
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('wrpc_extractor.log'),
-        logging.StreamHandler()
+        logging.StreamHandler(),
+        logging.FileHandler('wrpc_extractor.log')
     ]
 )
 
+# Constants
+WRPC_DATA_DIR = "../data"
+OUTPUT_DIR = "../data"
 WRPC_BASE_URL = "https://www.wrpc.gov.in"
 WRPC_DSM_URL = "https://www.wrpc.gov.in/menu/DSMUI%20Account%20_342"
-DOWNLOAD_DIR = "dsm_data"
-WRPC_DIR = "dsm_data/WRPC"
 
-DATA_TYPES = {
-    'DSM': ['dsm', 'daily', 'scheduling', 'accounting', 'ui'],
-    'EXCEL': ['excel', 'spreadsheet', 'data'],
-    'OTHER': ['other', 'misc']
+# Browser-like headers for web requests
+BROWSER_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache'
 }
 
-def setup_directories():
-    for directory in [DOWNLOAD_DIR, WRPC_DIR]:
-        os.makedirs(directory, exist_ok=True)
-        logging.info(f"Created directory: {directory}")
+def create_directories():
+    """Create necessary directories"""
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(WRPC_DATA_DIR, exist_ok=True)
+    logging.info(f"✅ Created directory: {OUTPUT_DIR}")
+    logging.info(f"✅ Created directory: {WRPC_DATA_DIR}")
 
-def scrape_wrpc_website():
-    logging.info("🔍 Scraping WRPC website for DSM data...")
+def get_session():
+    """Create and configure a requests session with browser-like behavior"""
+    session = requests.Session()
+    session.headers.update(BROWSER_HEADERS)
+    return session
+
+def download_from_wrpc_website():
+    """Download DSM data files from the WRPC website"""
+    logging.info("🌐 Attempting to download data from WRPC website...")
     
-    categorized_files = {data_type: [] for data_type in DATA_TYPES.keys()}
-    categorized_files['OTHER'] = []
+    session = get_session()
     
     try:
-        logging.info(f"Accessing: {WRPC_DSM_URL}")
-        resp = requests.get(WRPC_DSM_URL, timeout=30, verify=True)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
+        # Try to access the DSM page
+        logging.info(f"🔍 Accessing: {WRPC_DSM_URL}")
+        response = session.get(WRPC_DSM_URL, timeout=30, verify=True)
         
-        for a in soup.find_all("a", href=True):
-            href = a['href']
-            text = a.get_text(strip=True)
-            
-            text_lower = text.lower()
-            if any(keyword in text_lower for keyword in ['dsm', 'ui', 'account', 'daily', 'scheduling']):
-                if href.lower().endswith(('.xls', '.xlsx', '.zip', '.csv')):
-                    full_url = urljoin(WRPC_DSM_URL, href)
-                    
-                    file_info = {
-                        'href': href,
-                        'text': text,
-                        'url': full_url,
-                        'type': 'excel' if href.lower().endswith(('.xls', '.xlsx')) else 'zip' if href.lower().endswith('.zip') else 'csv'
-                    }
-                    
-                    categorized_files['DSM'].append(file_info)
-                    logging.info(f"🎯 Found WRPC DSM file: {text} -> {href}")
-                elif href == '#' or href.startswith('javascript:'):
-                    logging.debug(f"🔗 Found JavaScript link: {text}")
-                else:
-                    logging.debug(f"📄 Found non-file link: {href}")
-            
-            elif href.lower().endswith(('.xls', '.xlsx', '.zip', '.csv')):
-                full_url = urljoin(WRPC_DSM_URL, href)
-                
-                file_info = {
-                    'href': href,
-                    'text': text,
-                    'url': full_url,
-                    'type': 'excel' if href.lower().endswith(('.xls', '.xlsx')) else 'zip' if href.lower().endswith('.zip') else 'csv'
-                }
-                
-                categorized_files['OTHER'].append(file_info)
-                logging.info(f"📄 Found other WRPC file: {text} -> {href}")
+        if response.status_code != 200:
+            logging.error(f"❌ Failed to access WRPC website. Status code: {response.status_code}")
+            return False
         
-        for a in soup.find_all("a", href=True):
-            href = a['href']
-            text = a.get_text(strip=True)
+        logging.info("✅ Successfully accessed WRPC website")
+        
+        # Parse the page content
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Look for download links or file references
+        download_links = []
+        downloaded_files = []
+        
+        # Method 1: Look for direct file links
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            if any(ext in href.lower() for ext in ['.zip', '.xlsx', '.xls', '.csv']):
+                download_links.append(href)
+                logging.info(f"📎 Found file link: {href}")
+        
+        # Method 2: Look for common file patterns in the page
+        content_text = response.text
+        file_patterns = [
+            r'[a-zA-Z0-9_-]+\.zip',
+            r'[a-zA-Z0-9_-]+\.xlsx',
+            r'[a-zA-Z0-9_-]+\.csv'
+        ]
+        
+        for pattern in file_patterns:
+            matches = re.findall(pattern, content_text)
+            for match in matches:
+                if match not in download_links:
+                    download_links.append(match)
+                    logging.info(f"📎 Found file pattern: {match}")
+        
+        if not download_links:
+            logging.warning("⚠️ No direct download links found on the page")
+            logging.info("🔍 Attempting alternative download methods...")
             
-            if any(keyword in text.lower() for keyword in ['download', 'data', 'file', 'dsm', 'ui']):
-                if not href.lower().endswith(('.xls', '.xlsx', '.zip', '.csv', '.pdf')):
+            # Try to find files using common patterns and date-based URLs
+            current_date = datetime.now()
+            date_patterns = [
+                f"{current_date.strftime('%d%m%Y')}*.zip",
+                f"{current_date.strftime('%Y%m%d')}*.zip",
+                f"{current_date.strftime('%d%m%Y')}*sum*.zip",
+                f"{current_date.strftime('%Y%m%d')}*sum*.zip"
+            ]
+            
+            # Try common file paths
+            common_paths = [
+                "/allfile/",
+                "/files/",
+                "/data/",
+                "/downloads/",
+                "/dsm/"
+            ]
+            
+            for path in common_paths:
+                for pattern in date_patterns:
                     try:
-                        sub_url = urljoin(WRPC_DSM_URL, href)
-                        logging.info(f"🔍 Found potential subdirectory: {text} -> {sub_url}")
+                        test_url = f"{WRPC_BASE_URL}{path}{pattern}"
+                        logging.info(f"🔍 Testing: {test_url}")
+                        response = session.get(test_url, timeout=10, verify=True)
                         
-                        sub_resp = requests.get(sub_url, timeout=30, verify=True)
-                        sub_resp.raise_for_status()
-                        sub_soup = BeautifulSoup(sub_resp.text, "html.parser")
-                        
-                        for sub_a in sub_soup.find_all("a", href=True):
-                            sub_href = sub_a['href']
-                            sub_text = sub_a.get_text(strip=True)
+                        if response.status_code == 200 and len(response.content) > 1000:
+                            filename = pattern.replace('*', 'test')
+                            file_path = os.path.join(WRPC_DATA_DIR, filename)
+                            with open(file_path, 'wb') as f:
+                                f.write(response.content)
                             
-                            if sub_href.lower().endswith(('.xls', '.xlsx', '.zip', '.csv')):
-                                sub_full_url = urljoin(sub_url, sub_href)
-                                
-                                file_info = {
-                                    'href': sub_href,
-                                    'text': sub_text,
-                                    'url': sub_full_url,
-                                    'type': 'excel' if sub_href.lower().endswith(('.xls', '.xlsx')) else 'zip' if sub_href.lower().endswith('.zip') else 'csv'
-                                }
-                                
-                                categorized_files['DSM'].append(file_info)
-                                logging.info(f"🎯 Found WRPC file in subdirectory: {sub_text} -> {sub_href}")
-                            elif sub_href.lower().endswith('.pdf'):
-                                logging.debug(f"⏭️ Skipping PDF file in subdirectory: {sub_href}")
-                                
-                    except Exception as e:
-                        logging.warning(f"⚠️ Error accessing subdirectory {href}: {e}")
-                        continue
-        
-        total_files = sum(len(files) for files in categorized_files.values())
-        logging.info(f"📊 Found {total_files} files on WRPC website:")
-        for data_type, files in categorized_files.items():
-            if files:
-                logging.info(f"  - {data_type}: {len(files)} files")
-        
-        if total_files == 0:
-            logging.warning("⚠️ No files found on WRPC website. This might indicate:")
-            logging.warning("   - Website structure has changed")
-            logging.warning("   - Network connectivity issues")
-            logging.warning("   - No DSM data is currently available")
-            logging.warning("   - Website is temporarily down")
-        
-        return categorized_files
-        
-    except requests.RequestException as e:
-        logging.error(f"❌ Error accessing WRPC website: {e}")
-        return categorized_files
-
-def download_file(url, filename):
-    try:
-        logging.info(f"📥 Downloading: {filename}")
-        
-        resp = requests.get(url, timeout=60, stream=True, verify=True)
-        resp.raise_for_status()
-        
-        file_path = os.path.join(WRPC_DIR, filename)
-        
-        with open(file_path, 'wb') as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        logging.info(f"✅ Downloaded: {filename}")
-        return file_path
-        
-    except Exception as e:
-        logging.error(f"❌ Error downloading {filename}: {e}")
-        return None
-
-def process_zip_file(file_path, original_filename):
-    try:
-        logging.info(f"📦 Processing ZIP file: {file_path}")
-        
-        processed_data = {}
-        
-        with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            file_list = zip_ref.namelist()
-            logging.info(f"📋 Files in ZIP: {file_list}")
-            
-            for file_name in file_list:
-                if file_name.lower().endswith('.csv'):
-                    try:
-                        logging.info(f"📄 Processing CSV file: {file_name}")
-                        
-                        with zip_ref.open(file_name) as csv_file:
-                            df = pd.read_csv(csv_file, encoding='utf-8', on_bad_lines='skip')
-                        
-                        if not df.empty:
-                            df.columns = df.columns.str.strip()
-                            
-                            df = df.dropna(how='all').dropna(axis=1, how='all')
-                            
-                            if not df.empty:
-                                sheet_name = os.path.splitext(file_name)[0]
-                                processed_data[sheet_name] = df
-                                logging.info(f"✅ Processed CSV '{sheet_name}' with {len(df)} rows and {len(df.columns)} columns")
-                                
-                                logging.info(f"📊 Preview of CSV '{sheet_name}':")
-                                logging.info(f"Columns: {list(df.columns)}")
-                                logging.info(f"First 3 rows:\n{df.head(3)}")
-                            else:
-                                logging.warning(f"⚠️ CSV '{file_name}' is empty after cleaning")
-                        else:
-                            logging.warning(f"⚠️ CSV '{file_name}' is empty")
+                            logging.info(f"✅ Found and downloaded: {filename}")
+                            downloaded_files.append(file_path)
+                            break
                             
                     except Exception as e:
-                        logging.error(f"❌ Error processing CSV '{file_name}': {e}")
+                        logging.debug(f"⚠️ Failed to access {test_url}: {e}")
                         continue
-                        
-        return processed_data
+            
+            if not downloaded_files:
+                logging.warning("⚠️ No files found using alternative methods")
+                logging.info("💡 The website might require authentication or use dynamic content")
+                return False
         
-    except Exception as e:
-        logging.error(f"❌ Error processing ZIP file {file_path}: {e}")
-        return None
-
-def process_excel_file(file_path, original_filename):
-    try:
-        logging.info(f"📊 Processing Excel file: {file_path}")
-        
-        excel_file = pd.ExcelFile(file_path)
-        sheet_names = excel_file.sheet_names
-        logging.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
-        
-        processed_data = {}
-        for sheet_name in sheet_names:
+        # Try to download files
+        downloaded_files = []
+        for file_link in download_links[:5]:  # Limit to first 5 files
             try:
-                logging.info(f"Reading sheet: {sheet_name}")
-                df = pd.read_excel(file_path, sheet_name=sheet_name)
+                # Try different URL combinations
+                possible_urls = [
+                    urljoin(WRPC_BASE_URL, file_link),
+                    urljoin(WRPC_DSM_URL, file_link),
+                    f"{WRPC_BASE_URL}/allfile/{file_link}",
+                    f"{WRPC_BASE_URL}/files/{file_link}",
+                    f"{WRPC_BASE_URL}/downloads/{file_link}"
+                ]
                 
-                if not df.empty:
-                    df.columns = df.columns.str.strip()
-                    
-                    df = df.dropna(how='all').dropna(axis=1, how='all')
-                    
-                    if not df.empty:
-                        processed_data[sheet_name] = df
-                        logging.info(f"✅ Processed sheet '{sheet_name}' with {len(df)} rows and {len(df.columns)} columns")
+                for url in possible_urls:
+                    try:
+                        logging.info(f"⬇️ Attempting to download: {url}")
+                        file_response = session.get(url, timeout=30, verify=True)
                         
-                        logging.info(f"📊 Preview of sheet '{sheet_name}':")
-                        logging.info(f"Columns: {list(df.columns)}")
-                        logging.info(f"First 3 rows:\n{df.head(3)}")
+                        if file_response.status_code == 200 and len(file_response.content) > 1000:
+                            # Save the file
+                            file_path = os.path.join(WRPC_DATA_DIR, file_link)
+                            with open(file_path, 'wb') as f:
+                                f.write(file_response.content)
+                            
+                            logging.info(f"✅ Downloaded: {file_link} ({len(file_response.content)} bytes)")
+                            downloaded_files.append(file_path)
+                            
+                            # If it's a ZIP file, extract it
+                            if file_link.lower().endswith('.zip'):
+                                try:
+                                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                                        zip_ref.extractall(WRPC_DATA_DIR)
+                                        logging.info(f"📦 Extracted ZIP file: {file_link}")
+                                except Exception as e:
+                                    logging.warning(f"⚠️ Failed to extract ZIP: {e}")
+                            
+                            break  # Successfully downloaded, move to next file
+                            
+                    except Exception as e:
+                        logging.debug(f"⚠️ Failed to download from {url}: {e}")
+                        continue
                         
-                    else:
-                        logging.warning(f"⚠️ Sheet '{sheet_name}' is empty after cleaning")
-                else:
-                    logging.warning(f"⚠️ Sheet '{sheet_name}' is empty")
-                    
             except Exception as e:
-                logging.error(f"❌ Error processing sheet '{sheet_name}': {e}")
+                logging.warning(f"⚠️ Error processing {file_link}: {e}")
                 continue
         
-        return processed_data
-        
-    except Exception as e:
-        logging.error(f"❌ Error processing Excel file {file_path}: {e}")
-        return None
-
-def save_processed_data(processed_data, original_filename):
-    if not processed_data:
-        logging.warning("No data to save")
-        return None
-    
-    try:
-        target_dir = WRPC_DIR
-        logging.info(f"📁 Saving WRPC data to: {target_dir}")
-        
-        base_name = os.path.splitext(original_filename)[0]
-        output_filename = f"{base_name}_processed.xlsx"
-        output_path = os.path.join(target_dir, output_filename)
-        
-        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-            for sheet_name, df in processed_data.items():
-                df.to_excel(writer, sheet_name=sheet_name, index=False)
-                logging.info(f"💾 Saved sheet '{sheet_name}' with {len(df)} rows")
-        
-        logging.info(f"✅ Saved processed data to: {output_path}")
-        return output_path
-        
-    except Exception as e:
-        logging.error(f"❌ Error saving processed data: {e}")
-        return None
-
-def download_and_process_file(file_info, data_type):
-    filename = file_info['href']
-    url = file_info['url']
-    
-    file_path = download_file(url, filename)
-    if not file_path:
-        return False
-    
-    processed_data = None
-    if file_info['type'] == 'zip':
-        processed_data = process_zip_file(file_path, filename)
-    elif file_info['type'] == 'excel':
-        processed_data = process_excel_file(file_path, filename)
-    elif file_info['type'] == 'csv':
-        try:
-            df = pd.read_csv(file_path, encoding='utf-8', on_bad_lines='skip')
-            if not df.empty:
-                df.columns = df.columns.str.strip()
-                df = df.dropna(how='all').dropna(axis=1, how='all')
-                if not df.empty:
-                    processed_data = {'CSV_Data': df}
-                    logging.info(f"✅ Processed CSV file with {len(df)} rows")
-        except Exception as e:
-            logging.error(f"❌ Error processing CSV file: {e}")
-    
-    if processed_data:
-        output_path = save_processed_data(processed_data, filename)
-        if output_path:
+        if downloaded_files:
+            logging.info(f"✅ Successfully downloaded {len(downloaded_files)} files")
             return True
-    
-    return False
+        else:
+            logging.warning("⚠️ No files were successfully downloaded")
+            return False
+            
+    except Exception as e:
+        logging.error(f"❌ Error accessing WRPC website: {e}")
+        return False
 
-def run_update():
-    logging.info("🔄 Starting WRPC data update...")
+def get_csv_files():
+    """Get all CSV files in the WRPC data directory"""
+    csv_pattern = os.path.join(WRPC_DATA_DIR, "**/*.csv")
+    csv_files = glob.glob(csv_pattern, recursive=True)
     
+    # Filter out empty files, schedule files, and already processed files
+    valid_files = []
+    for file_path in csv_files:
+        file_size = os.path.getsize(file_path)
+        filename = os.path.basename(file_path)
+        
+        # Skip empty files, schedule files, and already processed files
+        if (file_size > 0 and 
+            "schedule" not in filename.lower() and
+            "_processed" not in filename and
+            "Summary_Report" not in filename):
+            valid_files.append(file_path)
+    
+    logging.info(f"📁 Found {len(valid_files)} valid CSV files")
+    return valid_files
+
+def validate_csv_structure(file_path):
+    """Validate if CSV file has the expected DSM structure"""
     try:
-        setup_directories()
+        # Read first few lines to check structure
+        df_sample = pd.read_csv(file_path, nrows=5)
         
-        categorized_files = scrape_wrpc_website()
+        # Check for required columns
+        required_columns = [
+            'Date', 'Time', 'Block', 'Freq(Hz)', 'Constituents',
+            'Actual (MWH)', 'Schedule (MWH)', 'SRAS (MWH)',
+            'Deviation(MWH)', 'Deviation (%)', 'DSM Payable (Rs.)',
+            'DSM Receivable (Rs.)', 'Normal Rate (p/Kwh)',
+            'Gen Variable Charges (p/Kwh)', 'HPDAM Ref. Rate (p/Kwh)',
+            'HPDAM Normal Rate (p/Kwh)'
+        ]
         
-        total_processed = 0
-        for data_type, files in categorized_files.items():
-            if files:
-                logging.info(f"📁 Processing {data_type} files...")
-                for file_info in files:
-                    if download_and_process_file(file_info, data_type):
-                        total_processed += 1
+        missing_columns = [col for col in required_columns if col not in df_sample.columns]
         
-        logging.info(f"✅ WRPC update completed. Processed {total_processed} files.")
+        if missing_columns:
+            logging.warning(f"⚠️ Missing columns in {os.path.basename(file_path)}: {missing_columns}")
+            return False
+        
+        return True
         
     except Exception as e:
-        logging.error(f"❌ Error in update: {e}")
+        logging.error(f"❌ Error validating {os.path.basename(file_path)}: {e}")
+        return False
+
+def extract_constituent_name(file_path):
+    """Extract constituent name from filename"""
+    filename = os.path.basename(file_path)
+    
+    # Remove common suffixes
+    name = filename.replace('_DSM-2024_Data.csv', '')
+    name = name.replace('_DSM-2024_Data', '')
+    
+    return name
+
+def process_csv_file(file_path):
+    """Process a single CSV file and extract insights"""
+    try:
+        filename = os.path.basename(file_path)
+        constituent = extract_constituent_name(file_path)
+        
+        logging.info(f"📊 Processing: {filename}")
+        
+        # Read the CSV file
+        df = pd.read_csv(file_path)
+        
+        # Basic data validation
+        if df.empty:
+            logging.warning(f"⚠️ Empty file: {filename}")
+            return None
+        
+        # Convert date and time columns
+        df['Date'] = pd.to_datetime(df['Date'])
+        df['DateTime'] = pd.to_datetime(df['Date'].astype(str) + ' ' + df['Time'])
+        
+        # Convert numeric columns
+        numeric_columns = [
+            'Freq(Hz)', 'Actual (MWH)', 'Schedule (MWH)', 'SRAS (MWH)',
+            'Deviation(MWH)', 'Deviation (%)', 'DSM Payable (Rs.)',
+            'DSM Receivable (Rs.)', 'Normal Rate (p/Kwh)',
+            'Gen Variable Charges (p/Kwh)', 'HPDAM Ref. Rate (p/Kwh)',
+            'HPDAM Normal Rate (p/Kwh)'
+        ]
+        
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Calculate additional metrics
+        df['Total_DSM_Amount'] = df['DSM Payable (Rs.)'] + df['DSM Receivable (Rs.)']
+        df['Deviation_Absolute'] = abs(df['Deviation(MWH)'])
+        
+        # Extract insights
+        insights = {
+            'constituent': constituent,
+            'filename': filename,
+            'total_records': len(df),
+            'date_range': {
+                'start': df['Date'].min().strftime('%Y-%m-%d'),
+                'end': df['Date'].max().strftime('%Y-%m-%d')
+            },
+            'total_actual_mwh': df['Actual (MWH)'].sum(),
+            'total_schedule_mwh': df['Schedule (MWH)'].sum(),
+            'total_deviation_mwh': df['Deviation(MWH)'].sum(),
+            'total_dsm_payable': df['DSM Payable (Rs.)'].sum(),
+            'total_dsm_receivable': df['DSM Receivable (Rs.)'].sum(),
+            'total_dsm_amount': df['Total_DSM_Amount'].sum(),
+            'avg_frequency': df['Freq(Hz)'].mean(),
+            'max_deviation': df['Deviation_Absolute'].max(),
+            'avg_deviation_percent': df['Deviation (%)'].mean(),
+            'blocks_with_deviation': len(df[df['Deviation(MWH)'] != 0]),
+            'blocks_with_dsm_payable': len(df[df['DSM Payable (Rs.)'] > 0]),
+            'blocks_with_dsm_receivable': len(df[df['DSM Receivable (Rs.)'] > 0])
+        }
+        
+        # Save processed data
+        output_filename = f"{constituent}_processed.csv"
+        output_path = os.path.join(OUTPUT_DIR, output_filename)
+        df.to_csv(output_path, index=False)
+        
+        logging.info(f"💾 Saved processed data: {output_filename}")
+        
+        return insights
+        
+    except Exception as e:
+        logging.error(f"❌ Error processing {os.path.basename(file_path)}: {e}")
+        return None
+
+def generate_summary_report(all_insights):
+    """Generate a summary report from all processed files"""
+    if not all_insights:
+        logging.warning("⚠️ No insights to generate report")
+        return
+    
+    # Create summary DataFrame
+    summary_data = []
+    for insight in all_insights:
+        if insight:
+            summary_data.append({
+                'Constituent': insight['constituent'],
+                'Total_Records': insight['total_records'],
+                'Date_Start': insight['date_range']['start'],
+                'Date_End': insight['date_range']['end'],
+                'Total_Actual_MWH': round(insight['total_actual_mwh'], 2),
+                'Total_Schedule_MWH': round(insight['total_schedule_mwh'], 2),
+                'Total_Deviation_MWH': round(insight['total_deviation_mwh'], 2),
+                'Total_DSM_Payable_Rs': round(insight['total_dsm_payable'], 2),
+                'Total_DSM_Receivable_Rs': round(insight['total_dsm_receivable'], 2),
+                'Total_DSM_Amount_Rs': round(insight['total_dsm_amount'], 2),
+                'Avg_Frequency_Hz': round(insight['avg_frequency'], 2),
+                'Max_Deviation_MWH': round(insight['max_deviation'], 2),
+                'Avg_Deviation_Percent': round(insight['avg_deviation_percent'], 2),
+                'Blocks_with_Deviation': insight['blocks_with_deviation'],
+                'Blocks_with_DSM_Payable': insight['blocks_with_dsm_payable'],
+                'Blocks_with_DSM_Receivable': insight['blocks_with_dsm_receivable']
+            })
+    
+    if summary_data:
+        summary_df = pd.DataFrame(summary_data)
+        
+        # Save summary report
+        summary_path = os.path.join(OUTPUT_DIR, "WRPC_Summary_Report.csv")
+        summary_df.to_csv(summary_path, index=False)
+        
+        # Generate additional analysis
+        analysis_path = os.path.join(OUTPUT_DIR, "WRPC_Analysis_Report.txt")
+        with open(analysis_path, 'w') as f:
+            f.write("WRPC DSM Data Analysis Report\n")
+            f.write("=" * 50 + "\n\n")
+            
+            f.write(f"Total Constituents Analyzed: {len(summary_data)}\n")
+            f.write(f"Total Records Processed: {summary_df['Total_Records'].sum()}\n")
+            f.write(f"Date Range: {summary_df['Date_Start'].min()} to {summary_df['Date_End'].max()}\n\n")
+            
+            f.write("Top 5 Constituents by Total DSM Amount:\n")
+            top_dsm = summary_df.nlargest(5, 'Total_DSM_Amount_Rs')
+            for _, row in top_dsm.iterrows():
+                f.write(f"  {row['Constituent']}: ₹{row['Total_DSM_Amount_Rs']:,.2f}\n")
+            
+            f.write(f"\nTop 5 Constituents by Deviation:\n")
+            top_deviation = summary_df.nlargest(5, 'Total_Deviation_MWH')
+            for _, row in top_deviation.iterrows():
+                f.write(f"  {row['Constituent']}: {row['Total_Deviation_MWH']:,.2f} MWH\n")
+            
+            f.write(f"\nAverage Frequency Across All Constituents: {summary_df['Avg_Frequency_Hz'].mean():.2f} Hz\n")
+            f.write(f"Total DSM Amount Across All Constituents: ₹{summary_df['Total_DSM_Amount_Rs'].sum():,.2f}\n")
+        
+        logging.info(f"📊 Generated summary report: {summary_path}")
+        logging.info(f"📊 Generated analysis report: {analysis_path}")
+        
+        return summary_df
+    
+    return None
 
 def main():
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "--help":
-            print("WRPC Data Extractor Usage:")
-            print("  python wrpc_extractor.py          # Run data extraction")
-            print("  python wrpc_extractor.py --help   # Show this help")
+    """Main function to run the WRPC data extraction"""
+    logging.info("🔄 Starting WRPC data extraction...")
+    
+    # Create directories
+    create_directories()
+    
+    # Get all CSV files
+    csv_files = get_csv_files()
+    
+    if not csv_files:
+        logging.warning("⚠️ No CSV files found in WRPC data directory")
+        logging.info("🌐 Attempting to download fresh data from WRPC website...")
+        
+        # Try to download from website
+        download_success = download_from_wrpc_website()
+        
+        if download_success:
+            # Re-check for CSV files after download
+            csv_files = get_csv_files()
+            if not csv_files:
+                logging.error("❌ Still no CSV files found after download attempt")
+                logging.info("💡 The website might require authentication or the data format has changed")
+                return
         else:
-            print("Unknown option. Use --help for usage information.")
+            logging.error("❌ Failed to download data from WRPC website")
+            logging.info("💡 The website might require authentication or use dynamic content")
+            logging.info("💡 Manual download instructions:")
+            logging.info("   1. Visit: https://www.wrpc.gov.in/menu/DSMUI%20Account%20_342")
+            logging.info("   2. Look for download links or file attachments")
+            logging.info("   3. Download CSV or ZIP files")
+            logging.info("   4. Place the files in: dsm_data/WRPC/")
+            logging.info("   5. Run this script again")
+            logging.info("💡 Alternatively, check if you have processed data in: processed_data/")
+            return
+    
+    # Process each file
+    all_insights = []
+    processed_count = 0
+    
+    for file_path in csv_files:
+        # Validate file structure
+        if validate_csv_structure(file_path):
+            insights = process_csv_file(file_path)
+            if insights:
+                all_insights.append(insights)
+                processed_count += 1
+        else:
+            logging.warning(f"⚠️ Skipping invalid file: {os.path.basename(file_path)}")
+    
+    # Generate summary report
+    if all_insights:
+        summary_df = generate_summary_report(all_insights)
+        
+        logging.info(f"✅ WRPC extraction completed successfully!")
+        logging.info(f"📊 Processed {processed_count} files out of {len(csv_files)} total files")
+        logging.info(f"📁 Output files saved in: {OUTPUT_DIR}")
+        
+        if summary_df is not None:
+            logging.info(f"📈 Total DSM amount across all constituents: ₹{summary_df['Total_DSM_Amount_Rs'].sum():,.2f}")
     else:
-        run_update()
+        logging.error("❌ No files were successfully processed")
 
 if __name__ == "__main__":
     main()

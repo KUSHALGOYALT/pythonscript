@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Eastern Regional Power Committee (ERPC) Data Extractor
-Extracts DSA (Daily Scheduling and Accounting) data from ERPC website
-"""
 
 import requests
 import pandas as pd
@@ -15,7 +11,6 @@ from bs4 import BeautifulSoup
 import sys
 from pathlib import Path
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -25,13 +20,11 @@ logging.basicConfig(
     ]
 )
 
-# Configuration
 ERPC_BASE_URL = "https://erpc.gov.in"
 ERPC_DSA_URL = "https://erpc.gov.in/ui-and-deviation-accts/"
 DOWNLOAD_DIR = "dsm_data"
 ERLDC_DIR = "dsm_data/ERLDC"
 
-# Data types for categorization
 DATA_TYPES = {
     'DSA': ['dsa', 'daily', 'scheduling', 'accounting', 'supporting'],
     'REPORT': ['report', 'summary', 'analysis'],
@@ -40,7 +33,6 @@ DATA_TYPES = {
 }
 
 def setup_directories():
-    """Create necessary directories"""
     for directory in [DOWNLOAD_DIR, ERLDC_DIR]:
         os.makedirs(directory, exist_ok=True)
         logging.info(f"Created directory: {directory}")
@@ -48,7 +40,6 @@ def setup_directories():
 
 
 def scrape_erpc_website():
-    """Scrape the ERPC website for DSA data"""
     logging.info("🔍 Scraping ERPC website for DSA data...")
     
     categorized_files = {data_type: [] for data_type in DATA_TYPES.keys()}
@@ -60,12 +51,10 @@ def scrape_erpc_website():
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         
-        # Look for all Excel files
         for a in soup.find_all("a", href=True):
             href = a['href']
             text = a.get_text(strip=True)
             
-            # Process Excel files
             if href.lower().endswith(('.xls', '.xlsx')):
                 full_url = urljoin(ERPC_DSA_URL, href)
                 
@@ -76,7 +65,6 @@ def scrape_erpc_website():
                     'type': 'excel'
                 }
                 
-                # Categorize based on file location or content
                 if 'wp-content/uploads' in href:
                     categorized_files['DSA'].append(file_info)
                     logging.info(f"🎯 Found Excel file in uploads: {text} -> {href}")
@@ -84,7 +72,6 @@ def scrape_erpc_website():
                     categorized_files['OTHER'].append(file_info)
                     logging.info(f"🎯 Found Excel file: {text} -> {href}")
                     
-            # Skip non-Excel files
             elif href == '#' or href.startswith('javascript:'):
                 logging.debug(f"🔗 Found JavaScript link: {text}")
             elif href.lower().endswith('.pdf'):
@@ -92,12 +79,10 @@ def scrape_erpc_website():
             else:
                 logging.debug(f"📄 Found non-file link: {href}")
         
-        # Also check for any subdirectories that might contain files
         for a in soup.find_all("a", href=True):
             href = a['href']
             text = a.get_text(strip=True)
             
-            # Look for potential subdirectories (not files)
             if not href.lower().endswith(('.xls', '.xlsx', '.pdf', '.zip')) and not href.startswith('#'):
                 sub_url = urljoin(ERPC_DSA_URL, href)
                 logging.info(f"🔍 Found potential subdirectory: {text} -> {sub_url}")
@@ -107,7 +92,6 @@ def scrape_erpc_website():
                     sub_resp.raise_for_status()
                     sub_soup = BeautifulSoup(sub_resp.text, "html.parser")
                     
-                    # Look for files in subdirectory
                     for sub_a in sub_soup.find_all("a", href=True):
                         sub_href = sub_a['href']
                         sub_text = sub_a.get_text(strip=True)
@@ -136,14 +120,12 @@ def scrape_erpc_website():
     except Exception as e:
         logging.error(f"❌ Unexpected error: {e}")
     
-    # Log summary
     total_files = sum(len(files) for files in categorized_files.values())
     logging.info(f"📊 Total files found: {total_files}")
     for data_type, files in categorized_files.items():
         if files:
             logging.info(f"📁 {data_type}: {len(files)} files")
     
-    # Validate that we found some files
     if total_files == 0:
         logging.warning("⚠️ No files found on ERPC website. This might indicate:")
         logging.warning("   - Website structure has changed")
@@ -154,7 +136,6 @@ def scrape_erpc_website():
     return categorized_files
 
 def download_file(url, filename):
-    """Download a file from URL"""
     try:
         logging.info(f"Downloading: {url}")
         resp = requests.get(url, timeout=60, stream=True, verify=True)
@@ -172,16 +153,13 @@ def download_file(url, filename):
         return None
 
 def process_excel_file(file_path, original_filename):
-    """Process Excel file and extract data"""
     try:
         logging.info(f"Processing Excel file: {original_filename}")
         
-        # Read all sheets
         excel_file = pd.ExcelFile(file_path)
         sheet_names = excel_file.sheet_names
         logging.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
         
-        # Process each sheet
         processed_data = {}
         for sheet_name in sheet_names:
             try:
@@ -189,10 +167,8 @@ def process_excel_file(file_path, original_filename):
                 df = pd.read_excel(file_path, sheet_name=sheet_name)
                 
                 if not df.empty:
-                    # Clean column names
                     df.columns = df.columns.str.strip()
                     
-                    # Remove completely empty rows and columns
                     df = df.dropna(how='all').dropna(axis=1, how='all')
                     
                     if not df.empty:
@@ -214,22 +190,18 @@ def process_excel_file(file_path, original_filename):
         return None
 
 def save_processed_data(processed_data, original_filename):
-    """Save processed data to Excel file"""
     if not processed_data:
         logging.warning("No data to save")
         return None
     
     try:
-        # Save all ERPC data to ERLDC directory
         target_dir = ERLDC_DIR
         logging.info(f"📁 Saving ERPC data to: {target_dir}")
         
-        # Create output filename
         base_name = os.path.splitext(original_filename)[0]
         output_filename = f"{base_name}_processed.xlsx"
         output_path = os.path.join(target_dir, output_filename)
         
-        # Save to Excel with multiple sheets
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             for sheet_name, df in processed_data.items():
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -243,16 +215,13 @@ def save_processed_data(processed_data, original_filename):
         return None
 
 def download_and_process_file(file_info, data_type):
-    """Download and process a single file"""
     filename = file_info['href']
     url = file_info['url']
     
-    # Download file
     file_path = download_file(url, filename)
     if not file_path:
         return False
     
-    # Process based on file type
     if file_info['type'] == 'excel':
         processed_data = process_excel_file(file_path, filename)
         if processed_data:
@@ -263,14 +232,11 @@ def download_and_process_file(file_info, data_type):
     return False
 
 def run_update():
-    """Run ERPC data update"""
     logging.info("🔄 Starting ERPC data update...")
     
     try:
-        # Scrape website
         categorized_files = scrape_erpc_website()
         
-        # Process files
         total_processed = 0
         for data_type, files in categorized_files.items():
             if files:
@@ -285,7 +251,6 @@ def run_update():
         logging.error(f"❌ Error in update: {e}")
 
 def main():
-    """Main function"""
     if len(sys.argv) > 1:
         if sys.argv[1] == '--help':
             print("ERPC Data Extractor Usage:")
@@ -296,7 +261,6 @@ def main():
             print("Unknown argument. Use --help for usage information.")
             return
     
-    # Run data extraction
     setup_directories()
     run_update()
 

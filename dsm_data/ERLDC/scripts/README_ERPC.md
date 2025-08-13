@@ -50,11 +50,7 @@ dsm_data/                     # Main output directory
 ├── ERLDC/                    # Eastern Regional Load Dispatch Centre data
 │   ├── erldc_file1_processed.xlsx
 │   └── erldc_file2_processed.xlsx
-├── NRLDC/                    # Northern Regional Load Dispatch Centre data
-│   ├── nrldc_file1_processed.xlsx
-│   └── nrldc_file2_processed.xlsx
-├── file1_processed.xlsx      # General processed Excel files
-└── file2_processed.xlsx
+└── file1_processed.xlsx      # General processed Excel files
 
 temp_erpc/                    # Temporary download directory
 ├── temp_file1.xls
@@ -65,10 +61,9 @@ erpc_extractor.log           # Detailed execution logs
 ```
 
 ### File Categorization
-The script automatically categorizes files into ERLDC or NRLDC directories based on:
-- **Filename analysis**: Checks for "erldc", "eastern", "nrldc", or "northern" in the filename
-- **Content analysis**: Examines column names and data content for regional indicators
-- **Default location**: Files without clear indicators are saved to the main directory
+The script automatically categorizes files into ERLDC directory:
+- **All ERPC data**: All extracted files are saved to the ERLDC directory
+- **File organization**: Files are organized by type and processing date
 
 ## ⚙️ Configuration
 
