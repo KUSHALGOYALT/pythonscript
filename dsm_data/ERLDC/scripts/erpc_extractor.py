@@ -105,6 +105,11 @@ def download_dsm_blockwise_files():
                             
                             # Check if it's a download link
                             if 'download' in link_text.lower() or 'data file' in link_text.lower():
+                                # Skip PDF files
+                                if href.lower().endswith('.pdf') or link_text.lower().endswith('.pdf'):
+                                    logging.info(f"⏭️ Skipping PDF file: {link_text}")
+                                    continue
+                                
                                 # Download the file
                                 full_url = urljoin(ERPC_BASE_URL, href)
                                 
@@ -114,7 +119,7 @@ def download_dsm_blockwise_files():
                                     file_response = session.get(full_url, timeout=30, verify=False)
                                     if file_response.status_code == 200 and len(file_response.content) > 1000:
                                         # Extract filename from URL or use description
-                                        if href.endswith(('.xlsx', '.xls', '.csv', '.pdf')):
+                                        if href.endswith(('.xlsx', '.xls', '.csv')):
                                             filename = os.path.basename(urlparse(href).path)
                                         else:
                                             # Create filename from description and date
