@@ -63,7 +63,6 @@ dsm_data/
 │   │   ├── requirements_nrldc.txt
 │   │   └── README_NRLDC.md
 │   └── *.xlsx                  # Processed Excel files
-├── ERLDC/                      # Eastern Regional Load Dispatch Centre data
 └── WRPC/                       # Western Regional Power Committee data
 ```
 
@@ -175,7 +174,6 @@ For issues or questions:
 ## 🔗 Related Scripts
 
 This script works alongside other regional power committee extractors:
-- **ERPC Extractor**: Eastern Regional Power Committee
 - **WRPC Extractor**: Western Regional Power Committee
 
 ## 📄 License
