@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
-"""
-WRPC (Western Regional Power Committee) Data Extractor
-Dynamically extracts and processes DSM (Demand Side Management) data from CSV files.
-Can also download fresh data from the WRPC website.
-"""
+
 
 import os
 import glob
 import logging
-import pandas as pd
 import requests
 import zipfile
 import re
-from datetime import datetime
+import csv
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
@@ -61,8 +57,142 @@ def get_session():
     session.headers.update(BROWSER_HEADERS)
     return session
 
+def load_learned_patterns():
+    """Load previously successful time patterns"""
+    pattern_file = os.path.join(WRPC_DATA_DIR, "successful_patterns.txt")
+    patterns = []
+    
+    try:
+        if os.path.exists(pattern_file):
+            with open(pattern_file, 'r') as f:
+                patterns = [line.strip() for line in f.readlines() if line.strip()]
+            logging.info(f"📚 Loaded {len(patterns)} learned patterns")
+    except Exception as e:
+        logging.debug(f"Could not load patterns: {e}")
+    
+    return patterns
+
+def save_successful_pattern(pattern):
+    """Save a successful time pattern for future use"""
+    try:
+        pattern_file = os.path.join(WRPC_DATA_DIR, "successful_patterns.txt")
+        
+        # Read existing patterns
+        existing_patterns = []
+        if os.path.exists(pattern_file):
+            with open(pattern_file, 'r') as f:
+                existing_patterns = [line.strip() for line in f.readlines() if line.strip()]
+        
+        # Add new pattern if not already present
+        if pattern not in existing_patterns:
+            existing_patterns.append(pattern)
+            
+            # Keep only the most recent 50 patterns to avoid file bloat
+            if len(existing_patterns) > 50:
+                existing_patterns = existing_patterns[-50:]
+            
+            # Save updated patterns
+            with open(pattern_file, 'w') as f:
+                for p in existing_patterns:
+                    f.write(f"{p}\n")
+            
+            logging.info(f"📚 Learned new successful pattern: {pattern}")
+        
+    except Exception as e:
+        logging.debug(f"Could not save pattern: {e}")
+
+def generate_dynamic_time_patterns():
+    """Generate dynamic time patterns based on learned patterns and common intervals"""
+    patterns = []
+    
+    # Load previously successful patterns (highest priority)
+    learned_patterns = load_learned_patterns()
+    
+    # Add learned patterns first
+    if learned_patterns:
+        for pattern in learned_patterns:
+            if len(pattern) >= 14:  # Full timestamp
+                patterns.append(pattern)
+            elif len(pattern) >= 8:  # Date only, generate common times
+                patterns.extend(generate_common_times_for_date(pattern))
+    
+    # Generate systematic time patterns if no learned patterns
+    if not patterns:
+        patterns = generate_systematic_time_patterns()
+    
+    return patterns
+
+def generate_common_times_for_date(date_pattern):
+    """Generate time patterns for every minute of the day"""
+    times = []
+    
+    # Generate patterns for every minute of the day (1440 patterns)
+    for hour in range(24):
+        for minute in range(60):  # Every minute
+            time_str = f"{hour:02d}{minute:02d}000000"
+            times.append(f"{date_pattern}{time_str}")
+    
+    return times
+
+def generate_systematic_time_patterns():
+    """Generate systematic time patterns covering every minute of the day"""
+    patterns = []
+    
+    # Generate patterns for every minute of the day (1440 patterns)
+    for hour in range(24):
+        for minute in range(60):  # Every minute
+            patterns.append(f"{hour:02d}{minute:02d}000000")
+    
+    return patterns
+
+def detect_new_columns(file_path):
+    """Detect and log all columns in the file for dynamic processing"""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            
+            if not header:
+                return []
+            
+            # Log all columns found in the file
+            logging.info(f"📋 All columns in {os.path.basename(file_path)}: {header}")
+            
+            # Save all columns for future reference and analysis
+            save_column_patterns(header, header)
+            
+            return header  # Return all columns for dynamic processing
+            
+    except Exception as e:
+        logging.debug(f"Could not detect columns: {e}")
+        return []
+
+def save_column_patterns(all_columns, new_columns):
+    """Save all column patterns for dynamic analysis"""
+    try:
+        column_file = os.path.join(WRPC_DATA_DIR, "column_patterns.txt")
+        
+        # Read existing patterns
+        existing_patterns = set()
+        if os.path.exists(column_file):
+            with open(column_file, 'r') as f:
+                existing_patterns = set(line.strip() for line in f.readlines())
+        
+        # Add all new columns (not just "new" ones)
+        all_patterns = existing_patterns.union(set(all_columns))
+        
+        # Save updated patterns
+        with open(column_file, 'w') as f:
+            for pattern in sorted(all_patterns):
+                f.write(f"{pattern}\n")
+        
+        logging.info(f"📝 Updated column patterns file with {len(all_columns)} total columns")
+        
+    except Exception as e:
+        logging.debug(f"Could not save column patterns: {e}")
+
 def download_from_wrpc_website():
-    """Download DSM data files from the WRPC website"""
+    """Download DSM data files from the WRPC website - Simple approach"""
     logging.info("🌐 Attempting to download data from WRPC website...")
     
     session = get_session()
@@ -81,122 +211,250 @@ def download_from_wrpc_website():
         # Parse the page content
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Look for download links or file references
+        # Look for any ZIP files in the page content
         download_links = []
         downloaded_files = []
         
         # Method 1: Look for direct file links
         for link in soup.find_all('a', href=True):
             href = link['href']
-            if any(ext in href.lower() for ext in ['.zip', '.xlsx', '.xls', '.csv']):
+            if '.zip' in href.lower():
                 download_links.append(href)
-                logging.info(f"📎 Found file link: {href}")
+                logging.info(f"📎 Found ZIP file link: {href}")
         
-        # Method 2: Look for common file patterns in the page
+        # Method 2: Look for any ZIP file patterns in the page text
         content_text = response.text
-        file_patterns = [
-            r'[a-zA-Z0-9_-]+\.zip',
-            r'[a-zA-Z0-9_-]+\.xlsx',
-            r'[a-zA-Z0-9_-]+\.csv'
+        # Find any pattern that looks like: allfile/[anything].zip
+        zip_patterns = [
+            r'allfile/[a-zA-Z0-9_-]+\.zip',  # allfile/ + anything + .zip
+            r'[a-zA-Z0-9_-]+\.zip',  # any .zip file
+            r'\d{8,20}[a-zA-Z0-9_-]*\.zip',  # numbers + anything + .zip
         ]
         
-        for pattern in file_patterns:
+        for pattern in zip_patterns:
             matches = re.findall(pattern, content_text)
             for match in matches:
                 if match not in download_links:
                     download_links.append(match)
-                    logging.info(f"📎 Found file pattern: {match}")
+                    logging.info(f"📎 Found ZIP file pattern: {match}")
         
-        if not download_links:
-            logging.warning("⚠️ No direct download links found on the page")
-            logging.info("🔍 Attempting alternative download methods...")
-            
-            # Try to find files using common patterns and date-based URLs
+        # Method 3: Try to download files from found links
+        for file_link in download_links:
+            try:
+                # Construct full URL
+                if file_link.startswith('http'):
+                    file_url = file_link
+                elif file_link.startswith('allfile/'):
+                    file_url = f"{WRPC_BASE_URL}/{file_link}"
+                else:
+                    file_url = f"{WRPC_BASE_URL}/allfile/{file_link}"
+                
+                logging.info(f"📥 Attempting to download: {file_url}")
+                file_response = session.get(file_url, timeout=30, verify=True)
+                
+                if file_response.status_code == 200 and len(file_response.content) > 1000:
+                    # Extract filename from URL
+                    filename = os.path.basename(urlparse(file_url).path)
+                    if not filename:
+                        filename = f"downloaded_file_{len(downloaded_files)}.zip"
+                    
+                    file_path = os.path.join(WRPC_DATA_DIR, filename)
+                    
+                    with open(file_path, 'wb') as f:
+                        f.write(file_response.content)
+                    
+                    logging.info(f"✅ Successfully downloaded: {filename} ({len(file_response.content)} bytes)")
+                    downloaded_files.append(file_path)
+                    
+                    # Process the downloaded ZIP file
+                    process_zip_file(file_path)
+                
+            except Exception as e:
+                logging.warning(f"⚠️ Error downloading {file_link}: {e}")
+                continue
+        
+        # Method 4: Try dynamic file patterns for recent dates
+        if not downloaded_files:
+            logging.info("🔍 Trying dynamic file patterns for recent dates...")
             current_date = datetime.now()
-            date_patterns = [
-                f"{current_date.strftime('%d%m%Y')}*.zip",
-                f"{current_date.strftime('%Y%m%d')}*.zip",
-                f"{current_date.strftime('%d%m%Y')}*sum*.zip",
-                f"{current_date.strftime('%Y%m%d')}*sum*.zip"
-            ]
             
-            # Try common file paths
-            common_paths = [
-                "/allfile/",
-                "/files/",
-                "/data/",
-                "/downloads/",
-                "/dsm/"
-            ]
-            
-            for path in common_paths:
-                for pattern in date_patterns:
+            # Try last 7 days
+            for days_back in range(7):
+                test_date = current_date - timedelta(days=days_back)
+                date_str = test_date.strftime('%d%m%Y')
+                
+                # Try different file extensions
+                file_extensions = ['sum4.zip', 'sum3a.zip', 'sum3.zip', 'sum2.zip', 'sum1.zip']
+                
+                # Try the known working pattern first (16:52:51.5241)
+                # This pattern works: 120820251652515241sum4.zip
+                known_time = "1652515241"  # 16:52:51.5241
+                
+                for extension in file_extensions:
+                    test_filename = f"{date_str}{known_time}{extension}"
+                    test_url = f"{WRPC_BASE_URL}/allfile/{test_filename}"
+                    
                     try:
-                        test_url = f"{WRPC_BASE_URL}{path}{pattern}"
-                        logging.info(f"🔍 Testing: {test_url}")
-                        response = session.get(test_url, timeout=10, verify=True)
+                        logging.info(f"🔍 Testing known pattern: {test_url}")
+                        file_response = session.get(test_url, timeout=5, verify=True)
                         
-                        if response.status_code == 200 and len(response.content) > 1000:
-                            filename = pattern.replace('*', 'test')
-                            file_path = os.path.join(WRPC_DATA_DIR, filename)
+                        if file_response.status_code == 200 and len(file_response.content) > 1000:
+                            file_path = os.path.join(WRPC_DATA_DIR, test_filename)
                             with open(file_path, 'wb') as f:
-                                f.write(response.content)
+                                f.write(file_response.content)
                             
-                            logging.info(f"✅ Found and downloaded: {filename}")
+                            logging.info(f"✅ Successfully downloaded: {test_filename} ({len(file_response.content)} bytes)")
                             downloaded_files.append(file_path)
-                            break
+                            process_zip_file(file_path)
+                            
+                            # Learn this successful pattern for future use
+                            save_successful_pattern(f"{known_time}{extension}")
+                            
+                            break  # Found one file for this date, move to next date
                             
                     except Exception as e:
                         logging.debug(f"⚠️ Failed to access {test_url}: {e}")
                         continue
-            
-            if not downloaded_files:
-                logging.warning("⚠️ No files found using alternative methods")
-                logging.info("💡 The website might require authentication or use dynamic content")
-                return False
-        
-        # Try to download files
-        downloaded_files = []
-        for file_link in download_links[:5]:  # Limit to first 5 files
-            try:
-                # Try different URL combinations
-                possible_urls = [
-                    urljoin(WRPC_BASE_URL, file_link),
-                    urljoin(WRPC_DSM_URL, file_link),
-                    f"{WRPC_BASE_URL}/allfile/{file_link}",
-                    f"{WRPC_BASE_URL}/files/{file_link}",
-                    f"{WRPC_BASE_URL}/downloads/{file_link}"
-                ]
                 
-                for url in possible_urls:
-                    try:
-                        logging.info(f"⬇️ Attempting to download: {url}")
-                        file_response = session.get(url, timeout=30, verify=True)
-                        
-                        if file_response.status_code == 200 and len(file_response.content) > 1000:
-                            # Save the file
-                            file_path = os.path.join(WRPC_DATA_DIR, file_link)
-                            with open(file_path, 'wb') as f:
-                                f.write(file_response.content)
+                # If we found a file for this date, break out of date loop
+                if any(f"{date_str}" in f for f in downloaded_files):
+                    break
+                
+                # If no file found with known pattern, try 30-minute intervals
+                if not any(f"{date_str}" in f for f in downloaded_files):
+                    logging.info(f"🔍 Trying 30-minute intervals for {date_str}...")
+                    
+                    for hour in range(24):
+                        for minute in [0, 30]:  # Every 30 minutes (00 and 30)
+                            time_str = f"{hour:02d}{minute:02d}000000"
                             
-                            logging.info(f"✅ Downloaded: {file_link} ({len(file_response.content)} bytes)")
-                            downloaded_files.append(file_path)
-                            
-                            # If it's a ZIP file, extract it
-                            if file_link.lower().endswith('.zip'):
+                            for extension in file_extensions:
+                                test_filename = f"{date_str}{time_str}{extension}"
+                                test_url = f"{WRPC_BASE_URL}/allfile/{test_filename}"
+                                
                                 try:
-                                    with zipfile.ZipFile(file_path, 'r') as zip_ref:
-                                        zip_ref.extractall(WRPC_DATA_DIR)
-                                        logging.info(f"📦 Extracted ZIP file: {file_link}")
+                                    logging.debug(f"🔍 Testing: {test_url}")
+                                    file_response = session.get(test_url, timeout=5, verify=True)
+                                    
+                                    if file_response.status_code == 200 and len(file_response.content) > 1000:
+                                        file_path = os.path.join(WRPC_DATA_DIR, test_filename)
+                                        with open(file_path, 'wb') as f:
+                                            f.write(file_response.content)
+                                        
+                                        logging.info(f"✅ Successfully downloaded: {test_filename} ({len(file_response.content)} bytes)")
+                                        downloaded_files.append(file_path)
+                                        process_zip_file(file_path)
+                                        
+                                        # Learn this successful pattern for future use
+                                        save_successful_pattern(f"{time_str}{extension}")
+                                        
+                                        break  # Found one file for this date, move to next date
+                                        
                                 except Exception as e:
-                                    logging.warning(f"⚠️ Failed to extract ZIP: {e}")
+                                    logging.debug(f"⚠️ Failed to access {test_url}: {e}")
+                                    continue
                             
-                            break  # Successfully downloaded, move to next file
-                            
-                    except Exception as e:
-                        logging.debug(f"⚠️ Failed to download from {url}: {e}")
-                        continue
+                            # If we found a file for this time, break out of time loop
+                            if any(f"{date_str}{time_str}" in f for f in downloaded_files):
+                                break
                         
+                        # If we found a file for this date, break out of date loop
+                        if any(f"{date_str}" in f for f in downloaded_files):
+                            break
+        
+        if downloaded_files:
+            logging.info(f"✅ Successfully downloaded {len(downloaded_files)} files")
+            return True
+        else:
+            logging.warning("⚠️ No ZIP files were found or downloaded")
+            logging.info("💡 The website might require authentication or use dynamic content")
+            return False
+        
+        # Try to download files from found links
+        for file_link in download_links:
+            try:
+                # Construct full URL
+                if file_link.startswith('http'):
+                    file_url = file_link
+                else:
+                    file_url = urljoin(WRPC_BASE_URL, file_link)
+                
+                logging.info(f"📥 Downloading: {file_url}")
+                file_response = session.get(file_url, timeout=30, verify=True)
+                
+                if file_response.status_code == 200 and len(file_response.content) > 1000:
+                    # Extract filename from URL
+                    filename = os.path.basename(urlparse(file_url).path)
+                    if not filename:
+                        filename = f"downloaded_file_{len(downloaded_files)}.zip"
+                    
+                    file_path = os.path.join(WRPC_DATA_DIR, filename)
+                    
+                    with open(file_path, 'wb') as f:
+                        f.write(file_response.content)
+                    
+                    logging.info(f"✅ Downloaded: {filename} ({len(file_response.content)} bytes)")
+                    downloaded_files.append(file_path)
+                
+            except Exception as e:
+                logging.warning(f"⚠️ Error processing {file_link}: {e}")
+                continue
+        
+        if downloaded_files:
+            logging.info(f"✅ Successfully downloaded {len(downloaded_files)} files")
+            
+            # Learn from successful downloads for future runs
+            successful_patterns = []
+            for file_path in downloaded_files:
+                filename = os.path.basename(file_path)
+                # Look for any sum*.zip pattern
+                if 'sum' in filename and '.zip' in filename:
+                    # Extract the time pattern from successful download
+                    for ext in ['sum4.zip', 'sum3a.zip', 'sum3.zip', 'sum2.zip', 'sum1.zip']:
+                        if ext in filename:
+                            time_part = filename.replace(ext, '')
+                            if len(time_part) >= 8:  # At least date part
+                                successful_patterns.append(time_part)
+                            break
+            
+            if successful_patterns:
+                logging.info(f"📚 Learned successful patterns: {successful_patterns[:3]}...")
+                # Save patterns for future reference using the new function
+                for pattern in successful_patterns:
+                    save_successful_pattern(pattern)
+            
+            return True
+        else:
+            logging.warning("⚠️ No files were successfully downloaded")
+            logging.info("💡 The website might require authentication or use dynamic content")
+            return False
+        
+        # Try to download files from found links
+        for file_link in download_links:
+            try:
+                # Construct full URL
+                if file_link.startswith('http'):
+                    file_url = file_link
+                else:
+                    file_url = urljoin(WRPC_BASE_URL, file_link)
+                
+                logging.info(f"📥 Downloading: {file_url}")
+                file_response = session.get(file_url, timeout=30, verify=True)
+                
+                if file_response.status_code == 200 and len(file_response.content) > 1000:
+                    # Extract filename from URL
+                    filename = os.path.basename(urlparse(file_url).path)
+                    if not filename:
+                        filename = f"downloaded_file_{len(downloaded_files)}.zip"
+                    
+                    file_path = os.path.join(WRPC_DATA_DIR, filename)
+                    
+                    with open(file_path, 'wb') as f:
+                        f.write(file_response.content)
+                    
+                    logging.info(f"✅ Downloaded: {filename} ({len(file_response.content)} bytes)")
+                    downloaded_files.append(file_path)
+                
             except Exception as e:
                 logging.warning(f"⚠️ Error processing {file_link}: {e}")
                 continue
@@ -234,28 +492,33 @@ def get_csv_files():
     return valid_files
 
 def validate_csv_structure(file_path):
-    """Validate if CSV file has the expected DSM structure"""
+    """Validate if CSV file has basic structure - Fully dynamic validation"""
     try:
         # Read first few lines to check structure
-        df_sample = pd.read_csv(file_path, nrows=5)
-        
-        # Check for required columns
-        required_columns = [
-            'Date', 'Time', 'Block', 'Freq(Hz)', 'Constituents',
-            'Actual (MWH)', 'Schedule (MWH)', 'SRAS (MWH)',
-            'Deviation(MWH)', 'Deviation (%)', 'DSM Payable (Rs.)',
-            'DSM Receivable (Rs.)', 'Normal Rate (p/Kwh)',
-            'Gen Variable Charges (p/Kwh)', 'HPDAM Ref. Rate (p/Kwh)',
-            'HPDAM Normal Rate (p/Kwh)'
-        ]
-        
-        missing_columns = [col for col in required_columns if col not in df_sample.columns]
-        
-        if missing_columns:
-            logging.warning(f"⚠️ Missing columns in {os.path.basename(file_path)}: {missing_columns}")
-            return False
-        
-        return True
+        with open(file_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            
+            if not header:
+                logging.warning(f"⚠️ Empty file: {os.path.basename(file_path)}")
+                return False
+            
+            # Check if file has at least some data rows
+            try:
+                first_data_row = next(reader, None)
+                if not first_data_row:
+                    logging.warning(f"⚠️ No data rows in {os.path.basename(file_path)}")
+                    return False
+            except:
+                logging.warning(f"⚠️ Cannot read data from {os.path.basename(file_path)}")
+                return False
+            
+            # Log the columns found for transparency
+            logging.info(f"📊 File structure: {os.path.basename(file_path)} - Found {len(header)} columns")
+            logging.info(f"📋 Columns: {', '.join(header[:5])}{'...' if len(header) > 5 else ''}")
+            
+            # Any CSV with headers and data is considered valid
+            return True
         
     except Exception as e:
         logging.error(f"❌ Error validating {os.path.basename(file_path)}: {e}")
@@ -272,147 +535,100 @@ def extract_constituent_name(file_path):
     return name
 
 def process_csv_file(file_path):
-    """Process a single CSV file and extract insights"""
+    """Process a single CSV file with dynamic column handling"""
     try:
         filename = os.path.basename(file_path)
         constituent = extract_constituent_name(file_path)
         
         logging.info(f"📊 Processing: {filename}")
         
-        # Read the CSV file
-        df = pd.read_csv(file_path)
+        # Read the CSV file to check if it's valid
+        with open(file_path, 'r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+            
+            if len(rows) <= 1:  # Only header or empty
+                logging.warning(f"⚠️ Empty file: {filename}")
+                return None
         
-        # Basic data validation
-        if df.empty:
-            logging.warning(f"⚠️ Empty file: {filename}")
-            return None
+        # Detect and log all columns for dynamic processing
+        all_columns = detect_new_columns(file_path)
         
-        # Convert date and time columns
-        df['Date'] = pd.to_datetime(df['Date'])
-        df['DateTime'] = pd.to_datetime(df['Date'].astype(str) + ' ' + df['Time'])
+        # Copy file to output directory with original structure preserved
+        output_filename = f"{constituent}_extracted.csv"
+        output_path = os.path.join(OUTPUT_DIR, output_filename)
         
-        # Convert numeric columns
-        numeric_columns = [
-            'Freq(Hz)', 'Actual (MWH)', 'Schedule (MWH)', 'SRAS (MWH)',
-            'Deviation(MWH)', 'Deviation (%)', 'DSM Payable (Rs.)',
-            'DSM Receivable (Rs.)', 'Normal Rate (p/Kwh)',
-            'Gen Variable Charges (p/Kwh)', 'HPDAM Ref. Rate (p/Kwh)',
-            'HPDAM Normal Rate (p/Kwh)'
-        ]
+        with open(file_path, 'r', encoding='utf-8') as source:
+            with open(output_path, 'w', encoding='utf-8', newline='') as target:
+                target.write(source.read())
         
-        for col in numeric_columns:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
+        logging.info(f"💾 Extracted data: {output_filename}")
+        logging.info(f"📋 Preserved {len(all_columns)} columns: {', '.join(all_columns[:3])}{'...' if len(all_columns) > 3 else ''}")
         
-        # Calculate additional metrics
-        df['Total_DSM_Amount'] = df['DSM Payable (Rs.)'] + df['DSM Receivable (Rs.)']
-        df['Deviation_Absolute'] = abs(df['Deviation(MWH)'])
-        
-        # Extract insights
-        insights = {
+        return {
             'constituent': constituent,
             'filename': filename,
-            'total_records': len(df),
-            'date_range': {
-                'start': df['Date'].min().strftime('%Y-%m-%d'),
-                'end': df['Date'].max().strftime('%Y-%m-%d')
-            },
-            'total_actual_mwh': df['Actual (MWH)'].sum(),
-            'total_schedule_mwh': df['Schedule (MWH)'].sum(),
-            'total_deviation_mwh': df['Deviation(MWH)'].sum(),
-            'total_dsm_payable': df['DSM Payable (Rs.)'].sum(),
-            'total_dsm_receivable': df['DSM Receivable (Rs.)'].sum(),
-            'total_dsm_amount': df['Total_DSM_Amount'].sum(),
-            'avg_frequency': df['Freq(Hz)'].mean(),
-            'max_deviation': df['Deviation_Absolute'].max(),
-            'avg_deviation_percent': df['Deviation (%)'].mean(),
-            'blocks_with_deviation': len(df[df['Deviation(MWH)'] != 0]),
-            'blocks_with_dsm_payable': len(df[df['DSM Payable (Rs.)'] > 0]),
-            'blocks_with_dsm_receivable': len(df[df['DSM Receivable (Rs.)'] > 0])
+            'output_file': output_filename,
+            'total_records': len(rows) - 1,  # Exclude header
+            'columns': all_columns,
+            'column_count': len(all_columns)
         }
-        
-        # Save processed data
-        output_filename = f"{constituent}_processed.csv"
-        output_path = os.path.join(OUTPUT_DIR, output_filename)
-        df.to_csv(output_path, index=False)
-        
-        logging.info(f"💾 Saved processed data: {output_filename}")
-        
-        return insights
         
     except Exception as e:
         logging.error(f"❌ Error processing {os.path.basename(file_path)}: {e}")
         return None
 
-def generate_summary_report(all_insights):
-    """Generate a summary report from all processed files"""
-    if not all_insights:
-        logging.warning("⚠️ No insights to generate report")
+def process_zip_file(file_path):
+    """Process a ZIP file and extract its contents"""
+    try:
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            # List contents
+            file_list = zip_ref.namelist()
+            logging.info(f"📦 ZIP contents: {file_list}")
+            
+            # Extract all files
+            zip_ref.extractall(WRPC_DATA_DIR)
+            logging.info(f"✅ Extracted {len(file_list)} files from ZIP")
+            
+            return file_list
+            
+    except Exception as e:
+        logging.error(f"❌ Error processing ZIP file: {e}")
+        return []
+
+def generate_simple_report(processed_files):
+    """Generate a dynamic report of processed files"""
+    if not processed_files:
+        logging.warning("⚠️ No files to report")
         return
     
-    # Create summary DataFrame
-    summary_data = []
-    for insight in all_insights:
-        if insight:
-            summary_data.append({
-                'Constituent': insight['constituent'],
-                'Total_Records': insight['total_records'],
-                'Date_Start': insight['date_range']['start'],
-                'Date_End': insight['date_range']['end'],
-                'Total_Actual_MWH': round(insight['total_actual_mwh'], 2),
-                'Total_Schedule_MWH': round(insight['total_schedule_mwh'], 2),
-                'Total_Deviation_MWH': round(insight['total_deviation_mwh'], 2),
-                'Total_DSM_Payable_Rs': round(insight['total_dsm_payable'], 2),
-                'Total_DSM_Receivable_Rs': round(insight['total_dsm_receivable'], 2),
-                'Total_DSM_Amount_Rs': round(insight['total_dsm_amount'], 2),
-                'Avg_Frequency_Hz': round(insight['avg_frequency'], 2),
-                'Max_Deviation_MWH': round(insight['max_deviation'], 2),
-                'Avg_Deviation_Percent': round(insight['avg_deviation_percent'], 2),
-                'Blocks_with_Deviation': insight['blocks_with_deviation'],
-                'Blocks_with_DSM_Payable': insight['blocks_with_dsm_payable'],
-                'Blocks_with_DSM_Receivable': insight['blocks_with_dsm_receivable']
-            })
+    # Create dynamic report
+    report_path = os.path.join(OUTPUT_DIR, "WRPC_Extraction_Report.txt")
+    with open(report_path, 'w') as f:
+        f.write("WRPC Dynamic Data Extraction Report\n")
+        f.write("=" * 45 + "\n\n")
+        
+        f.write(f"Total Files Processed: {len(processed_files)}\n")
+        f.write(f"Extraction Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Processing Mode: Dynamic (No fixed column requirements)\n\n")
+        
+        f.write("Processed Files:\n")
+        f.write("-" * 20 + "\n")
+        for file_info in processed_files:
+            if file_info:
+                f.write(f"• {file_info['constituent']}: {file_info['total_records']} records, {file_info['column_count']} columns\n")
+                f.write(f"  Output: {file_info['output_file']}\n")
+                f.write(f"  Columns: {', '.join(file_info['columns'][:5])}{'...' if len(file_info['columns']) > 5 else ''}\n\n")
+        
+        f.write(f"\nTotal Records Extracted: {sum(f['total_records'] for f in processed_files if f)}\n")
+        f.write(f"Total Columns Discovered: {len(set().union(*[set(f['columns']) for f in processed_files if f]))}\n")
+        f.write(f"\nNote: All files processed with original column structure preserved\n")
     
-    if summary_data:
-        summary_df = pd.DataFrame(summary_data)
-        
-        # Save summary report
-        summary_path = os.path.join(OUTPUT_DIR, "WRPC_Summary_Report.csv")
-        summary_df.to_csv(summary_path, index=False)
-        
-        # Generate additional analysis
-        analysis_path = os.path.join(OUTPUT_DIR, "WRPC_Analysis_Report.txt")
-        with open(analysis_path, 'w') as f:
-            f.write("WRPC DSM Data Analysis Report\n")
-            f.write("=" * 50 + "\n\n")
-            
-            f.write(f"Total Constituents Analyzed: {len(summary_data)}\n")
-            f.write(f"Total Records Processed: {summary_df['Total_Records'].sum()}\n")
-            f.write(f"Date Range: {summary_df['Date_Start'].min()} to {summary_df['Date_End'].max()}\n\n")
-            
-            f.write("Top 5 Constituents by Total DSM Amount:\n")
-            top_dsm = summary_df.nlargest(5, 'Total_DSM_Amount_Rs')
-            for _, row in top_dsm.iterrows():
-                f.write(f"  {row['Constituent']}: ₹{row['Total_DSM_Amount_Rs']:,.2f}\n")
-            
-            f.write(f"\nTop 5 Constituents by Deviation:\n")
-            top_deviation = summary_df.nlargest(5, 'Total_Deviation_MWH')
-            for _, row in top_deviation.iterrows():
-                f.write(f"  {row['Constituent']}: {row['Total_Deviation_MWH']:,.2f} MWH\n")
-            
-            f.write(f"\nAverage Frequency Across All Constituents: {summary_df['Avg_Frequency_Hz'].mean():.2f} Hz\n")
-            f.write(f"Total DSM Amount Across All Constituents: ₹{summary_df['Total_DSM_Amount_Rs'].sum():,.2f}\n")
-        
-        logging.info(f"📊 Generated summary report: {summary_path}")
-        logging.info(f"📊 Generated analysis report: {analysis_path}")
-        
-        return summary_df
-    
-    return None
+    logging.info(f"📊 Generated dynamic extraction report: {report_path}")
 
 def main():
-    """Main function to run the WRPC data extraction"""
-    logging.info("🔄 Starting WRPC data extraction...")
+    """Main function to run the WRPC dynamic data extraction"""
+    logging.info("🔄 Starting WRPC dynamic data extraction...")
     
     # Create directories
     create_directories()
@@ -428,6 +644,11 @@ def main():
         download_success = download_from_wrpc_website()
         
         if download_success:
+            # Process any downloaded ZIP files
+            zip_files = glob.glob(os.path.join(WRPC_DATA_DIR, "*.zip"))
+            for zip_file in zip_files:
+                process_zip_file(zip_file)
+            
             # Re-check for CSV files after download
             csv_files = get_csv_files()
             if not csv_files:
@@ -441,35 +662,33 @@ def main():
             logging.info("   1. Visit: https://www.wrpc.gov.in/menu/DSMUI%20Account%20_342")
             logging.info("   2. Look for download links or file attachments")
             logging.info("   3. Download CSV or ZIP files")
-            logging.info("   4. Place the files in: dsm_data/WRPC/")
+            logging.info("   4. Place the files in: dsm_data/WRPC/data/")
             logging.info("   5. Run this script again")
-            logging.info("💡 Alternatively, check if you have processed data in: processed_data/")
             return
     
-    # Process each file
-    all_insights = []
+    # Process each file with dynamic column handling
+    processed_files = []
     processed_count = 0
     
     for file_path in csv_files:
-        # Validate file structure
+        # Validate basic file structure (any CSV with headers and data)
         if validate_csv_structure(file_path):
-            insights = process_csv_file(file_path)
-            if insights:
-                all_insights.append(insights)
+            file_info = process_csv_file(file_path)
+            if file_info:
+                processed_files.append(file_info)
                 processed_count += 1
         else:
             logging.warning(f"⚠️ Skipping invalid file: {os.path.basename(file_path)}")
     
-    # Generate summary report
-    if all_insights:
-        summary_df = generate_summary_report(all_insights)
+    # Generate dynamic report
+    if processed_files:
+        generate_simple_report(processed_files)
         
-        logging.info(f"✅ WRPC extraction completed successfully!")
+        logging.info(f"✅ WRPC dynamic extraction completed successfully!")
         logging.info(f"📊 Processed {processed_count} files out of {len(csv_files)} total files")
         logging.info(f"📁 Output files saved in: {OUTPUT_DIR}")
-        
-        if summary_df is not None:
-            logging.info(f"📈 Total DSM amount across all constituents: ₹{summary_df['Total_DSM_Amount_Rs'].sum():,.2f}")
+        logging.info(f"📈 Total records extracted: {sum(f['total_records'] for f in processed_files)}")
+        logging.info(f"🔍 Total unique columns discovered: {len(set().union(*[set(f['columns']) for f in processed_files if f]))}")
     else:
         logging.error("❌ No files were successfully processed")
 
