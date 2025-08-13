@@ -7,7 +7,6 @@ A Python script for automatically extracting and processing DSM UI Account data 
 - **ZIP File Processing**: Extracts and processes CSV files from ZIP archives
 - **Intelligent File Tracking**: Tracks file changes using MD5 hashing
 - **Multi-sheet Processing**: Processes Excel files with multiple sheets
-- **Automated Scheduling**: Runs weekly updates automatically
 - **Comprehensive Logging**: Detailed logs for monitoring and debugging
 - **Data Cleaning**: Removes empty rows/columns and cleans data
 

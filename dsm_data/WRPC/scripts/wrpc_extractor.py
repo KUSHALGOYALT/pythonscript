@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Western Regional Power Committee (WRPC) Data Extractor
-Extracts and processes DSM UI Account data from WRPC website
-"""
 
 import os
 import sys
@@ -15,7 +11,6 @@ from bs4 import BeautifulSoup
 import zipfile
 import io
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -25,13 +20,11 @@ logging.basicConfig(
     ]
 )
 
-# Configuration
 WRPC_BASE_URL = "https://www.wrpc.gov.in"
 WRPC_DSM_URL = "https://www.wrpc.gov.in/menu/DSMUI%20Account%20_342"
 DOWNLOAD_DIR = "dsm_data"
 WRPC_DIR = "dsm_data/WRPC"
 
-# Data types for categorization
 DATA_TYPES = {
     'DSM': ['dsm', 'daily', 'scheduling', 'accounting', 'ui'],
     'EXCEL': ['excel', 'spreadsheet', 'data'],
@@ -39,15 +32,11 @@ DATA_TYPES = {
 }
 
 def setup_directories():
-    """Create necessary directories"""
     for directory in [DOWNLOAD_DIR, WRPC_DIR]:
         os.makedirs(directory, exist_ok=True)
         logging.info(f"Created directory: {directory}")
 
-
-
 def scrape_wrpc_website():
-    """Scrape the WRPC website for DSM data"""
     logging.info("🔍 Scraping WRPC website for DSM data...")
     
     categorized_files = {data_type: [] for data_type in DATA_TYPES.keys()}
@@ -59,12 +48,10 @@ def scrape_wrpc_website():
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         
-        # Look for DSM, UI, and account related files
         for a in soup.find_all("a", href=True):
             href = a['href']
             text = a.get_text(strip=True)
             
-            # Look for DSM, UI, account related files
             text_lower = text.lower()
             if any(keyword in text_lower for keyword in ['dsm', 'ui', 'account', 'daily', 'scheduling']):
                 if href.lower().endswith(('.xls', '.xlsx', '.zip', '.csv')):
@@ -84,7 +71,6 @@ def scrape_wrpc_website():
                 else:
                     logging.debug(f"📄 Found non-file link: {href}")
             
-            # Look for any downloadable files
             elif href.lower().endswith(('.xls', '.xlsx', '.zip', '.csv')):
                 full_url = urljoin(WRPC_DSM_URL, href)
                 
@@ -98,12 +84,10 @@ def scrape_wrpc_website():
                 categorized_files['OTHER'].append(file_info)
                 logging.info(f"📄 Found other WRPC file: {text} -> {href}")
         
-        # Also check for any subdirectories or additional pages
         for a in soup.find_all("a", href=True):
             href = a['href']
             text = a.get_text(strip=True)
             
-            # Look for potential subdirectories
             if any(keyword in text.lower() for keyword in ['download', 'data', 'file', 'dsm', 'ui']):
                 if not href.lower().endswith(('.xls', '.xlsx', '.zip', '.csv', '.pdf')):
                     try:
@@ -137,14 +121,12 @@ def scrape_wrpc_website():
                         logging.warning(f"⚠️ Error accessing subdirectory {href}: {e}")
                         continue
         
-        # Summary
         total_files = sum(len(files) for files in categorized_files.values())
         logging.info(f"📊 Found {total_files} files on WRPC website:")
         for data_type, files in categorized_files.items():
             if files:
                 logging.info(f"  - {data_type}: {len(files)} files")
         
-        # Validate that we found some files
         if total_files == 0:
             logging.warning("⚠️ No files found on WRPC website. This might indicate:")
             logging.warning("   - Website structure has changed")
@@ -159,7 +141,6 @@ def scrape_wrpc_website():
         return categorized_files
 
 def download_file(url, filename):
-    """Download a file from URL"""
     try:
         logging.info(f"📥 Downloading: {filename}")
         
@@ -180,14 +161,12 @@ def download_file(url, filename):
         return None
 
 def process_zip_file(file_path, original_filename):
-    """Process ZIP file containing CSV data"""
     try:
         logging.info(f"📦 Processing ZIP file: {file_path}")
         
         processed_data = {}
         
         with zipfile.ZipFile(file_path, 'r') as zip_ref:
-            # List all files in the ZIP
             file_list = zip_ref.namelist()
             logging.info(f"📋 Files in ZIP: {file_list}")
             
@@ -196,15 +175,12 @@ def process_zip_file(file_path, original_filename):
                     try:
                         logging.info(f"📄 Processing CSV file: {file_name}")
                         
-                        # Read CSV from ZIP
                         with zip_ref.open(file_name) as csv_file:
                             df = pd.read_csv(csv_file, encoding='utf-8', on_bad_lines='skip')
                         
                         if not df.empty:
-                            # Clean column names
                             df.columns = df.columns.str.strip()
                             
-                            # Remove completely empty rows and columns
                             df = df.dropna(how='all').dropna(axis=1, how='all')
                             
                             if not df.empty:
@@ -212,7 +188,6 @@ def process_zip_file(file_path, original_filename):
                                 processed_data[sheet_name] = df
                                 logging.info(f"✅ Processed CSV '{sheet_name}' with {len(df)} rows and {len(df.columns)} columns")
                                 
-                                # Show first few rows for preview
                                 logging.info(f"📊 Preview of CSV '{sheet_name}':")
                                 logging.info(f"Columns: {list(df.columns)}")
                                 logging.info(f"First 3 rows:\n{df.head(3)}")
@@ -232,16 +207,13 @@ def process_zip_file(file_path, original_filename):
         return None
 
 def process_excel_file(file_path, original_filename):
-    """Process Excel file"""
     try:
         logging.info(f"📊 Processing Excel file: {file_path}")
         
-        # Read all sheets
         excel_file = pd.ExcelFile(file_path)
         sheet_names = excel_file.sheet_names
         logging.info(f"Found {len(sheet_names)} sheets: {sheet_names}")
         
-        # Process each sheet
         processed_data = {}
         for sheet_name in sheet_names:
             try:
@@ -249,17 +221,14 @@ def process_excel_file(file_path, original_filename):
                 df = pd.read_excel(file_path, sheet_name=sheet_name)
                 
                 if not df.empty:
-                    # Clean column names
                     df.columns = df.columns.str.strip()
                     
-                    # Remove completely empty rows and columns
                     df = df.dropna(how='all').dropna(axis=1, how='all')
                     
                     if not df.empty:
                         processed_data[sheet_name] = df
                         logging.info(f"✅ Processed sheet '{sheet_name}' with {len(df)} rows and {len(df.columns)} columns")
                         
-                        # Show first few rows for preview
                         logging.info(f"📊 Preview of sheet '{sheet_name}':")
                         logging.info(f"Columns: {list(df.columns)}")
                         logging.info(f"First 3 rows:\n{df.head(3)}")
@@ -280,22 +249,18 @@ def process_excel_file(file_path, original_filename):
         return None
 
 def save_processed_data(processed_data, original_filename):
-    """Save processed data to Excel file"""
     if not processed_data:
         logging.warning("No data to save")
         return None
     
     try:
-        # Determine target directory - WRPC data goes to WRPC directory
         target_dir = WRPC_DIR
         logging.info(f"📁 Saving WRPC data to: {target_dir}")
         
-        # Create output filename
         base_name = os.path.splitext(original_filename)[0]
         output_filename = f"{base_name}_processed.xlsx"
         output_path = os.path.join(target_dir, output_filename)
         
-        # Save to Excel with multiple sheets
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             for sheet_name, df in processed_data.items():
                 df.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -309,23 +274,19 @@ def save_processed_data(processed_data, original_filename):
         return None
 
 def download_and_process_file(file_info, data_type):
-    """Download and process a single file"""
     filename = file_info['href']
     url = file_info['url']
     
-    # Download file
     file_path = download_file(url, filename)
     if not file_path:
         return False
     
-    # Process based on file type
     processed_data = None
     if file_info['type'] == 'zip':
         processed_data = process_zip_file(file_path, filename)
     elif file_info['type'] == 'excel':
         processed_data = process_excel_file(file_path, filename)
     elif file_info['type'] == 'csv':
-        # For CSV files, read directly
         try:
             df = pd.read_csv(file_path, encoding='utf-8', on_bad_lines='skip')
             if not df.empty:
@@ -345,17 +306,13 @@ def download_and_process_file(file_info, data_type):
     return False
 
 def run_update():
-    """Run WRPC data update"""
     logging.info("🔄 Starting WRPC data update...")
     
     try:
-        # Ensure directories exist
         setup_directories()
         
-        # Scrape website
         categorized_files = scrape_wrpc_website()
         
-        # Process files
         total_processed = 0
         for data_type, files in categorized_files.items():
             if files:
@@ -370,7 +327,6 @@ def run_update():
         logging.error(f"❌ Error in update: {e}")
 
 def main():
-    """Main function"""
     if len(sys.argv) > 1:
         if sys.argv[1] == "--help":
             print("WRPC Data Extractor Usage:")
@@ -379,7 +335,6 @@ def main():
         else:
             print("Unknown option. Use --help for usage information.")
     else:
-        # Run data extraction
         run_update()
 
 if __name__ == "__main__":
