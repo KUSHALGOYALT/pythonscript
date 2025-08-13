@@ -63,3 +63,7 @@ Thumbs.db
 backup_*/
 *.bak
 *.backup
+
+# Data files
+dsm_data/*/data/
+*.zip
