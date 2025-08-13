@@ -34,6 +34,36 @@ def setup_directories():
         os.makedirs(directory, exist_ok=True)
         logging.info(f"Created directory: {directory}")
 
+def detect_financial_year_from_website():
+    """Dynamically detect the financial year from the NRPC website's JavaScript code"""
+    try:
+        logging.info("🔍 Detecting financial year from NRPC website...")
+        
+        # Fetch the main page
+        response = requests.get(NRPC_BASE_URL, timeout=30)
+        response.raise_for_status()
+        
+        # Look for the financial year pattern in the JavaScript code
+        content = response.text
+        
+        # Pattern to look for: "2021-22/dsa/" or similar
+        import re
+        fy_pattern = r'(\d{4}-\d{2})/dsa/'
+        match = re.search(fy_pattern, content)
+        
+        if match:
+            detected_fy = match.group(1)
+            logging.info(f"✅ Detected financial year: {detected_fy}")
+            return detected_fy
+        else:
+            logging.warning("⚠️ Could not detect financial year from website, using fallback: 2021-22")
+            return "2021-22"
+            
+    except Exception as e:
+        logging.error(f"❌ Error detecting financial year: {e}")
+        logging.warning("⚠️ Using fallback financial year: 2021-22")
+        return "2021-22"
+
 def get_latest_dsm_file_url():
     """Get the latest DSM file URL from NRPC website"""
     try:
@@ -58,20 +88,10 @@ def get_latest_dsm_file_url():
                     logging.info(f"Found week option: {value}")
         
         if week_options:
-            # Look for the most recent 2021 data (since the URL should be 2021-22)
-            # Filter for dates that end with '21' (year 2021)
-            week_2021_options = [week for week in week_options if week.split('-')[0].endswith('21')]
+            # Get the most recent week (first option is typically the latest)
+            latest_week = week_options[0]
+            logging.info(f"Selected latest week: {latest_week}")
             
-            if week_2021_options:
-                latest_week = week_2021_options[0]  # Get the first (most recent) 2021 week
-                logging.info(f"Selected latest 2021 week: {latest_week}")
-            else:
-                # Fallback to the first option if no 2021 data found
-                latest_week = week_options[0]
-                logging.info(f"No 2021 data found, using latest week: {latest_week}")
-            
-            # Construct the DSM file URL based on the pattern
-            # Pattern: 164.100.60.165/comm/2021-22/dsa/210725-270725(WK-17)/Supporting_files.xls
             # Extract year from the week pattern (e.g., 210725 -> 2021)
             week_start = latest_week.split('-')[0]
             
@@ -79,13 +99,10 @@ def get_latest_dsm_file_url():
             # For example: 210725 -> 21 (year 2021)
             year_suffix = week_start[4:6]  # Extract year from date like 210725 -> 21
             
-            # Based on the URL pattern: 164.100.60.165/comm/2021-22/dsa/210725-270725(WK-17)/Supporting_files.xls
-            # The date 210725 is July 21, 2021, and the FY is 2021-22
-            # So the financial year starts in the same year as the date
-            fy_start = 2000 + int(year_suffix)
-            fy_end = fy_start + 1
+            # Dynamically detect the financial year from the website
+            financial_year = detect_financial_year_from_website()
             
-            dsm_url = f"http://164.100.60.165/comm/{fy_start}-{str(fy_end)[2:]}/dsa/{latest_week}/Supporting_files.xls"
+            dsm_url = f"http://164.100.60.165/comm/{financial_year}/dsa/{latest_week}/Supporting_files.xls"
             logging.info(f"Constructed DSM URL: {dsm_url}")
             
             return dsm_url

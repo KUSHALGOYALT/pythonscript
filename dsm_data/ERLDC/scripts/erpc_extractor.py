@@ -60,71 +60,45 @@ def scrape_erpc_website():
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         
-        # Look for DSM, UI, and deviation related files
+        # Look for all Excel files
         for a in soup.find_all("a", href=True):
             href = a['href']
             text = a.get_text(strip=True)
             
-            # Look for DSM, UI, deviation related files
-            text_lower = text.lower()
-            if any(keyword in text_lower for keyword in ['dsm', 'ui', 'deviation', 'blockwise', 'daily', 'scheduling']):
-                if href.lower().endswith(('.xls', '.xlsx')):
-                    full_url = urljoin(ERPC_DSA_URL, href)
-                    
-                    file_info = {
-                        'href': href,
-                        'text': text,
-                        'url': full_url,
-                        'type': 'excel'
-                    }
-                    
+            # Process Excel files
+            if href.lower().endswith(('.xls', '.xlsx')):
+                full_url = urljoin(ERPC_DSA_URL, href)
+                
+                file_info = {
+                    'href': href,
+                    'text': text,
+                    'url': full_url,
+                    'type': 'excel'
+                }
+                
+                # Categorize based on file location or content
+                if 'wp-content/uploads' in href:
                     categorized_files['DSA'].append(file_info)
-                    logging.info(f"🎯 Found DSM/UI Excel file: {text} -> {href}")
-                elif href == '#' or href.startswith('javascript:'):
-                    logging.debug(f"🔗 Found JavaScript link: {text}")
+                    logging.info(f"🎯 Found Excel file in uploads: {text} -> {href}")
                 else:
-                    logging.debug(f"📄 Found non-file link: {href}")
-            
-            # Look for any Excel files in uploads directory
-            elif 'wp-content/uploads' in href and href.lower().endswith(('.xls', '.xlsx')):
-                full_url = urljoin(ERPC_DSA_URL, href)
-                
-                file_info = {
-                    'href': href,
-                    'text': text,
-                    'url': full_url,
-                    'type': 'excel'
-                }
-                
-                categorized_files['DSA'].append(file_info)
-                logging.info(f"🎯 Found Excel file in uploads: {href}")
-                
-            # Look for any Excel files
-            elif href.lower().endswith(('.xls', '.xlsx')):
-                full_url = urljoin(ERPC_DSA_URL, href)
-                
-                file_info = {
-                    'href': href,
-                    'text': text,
-                    'url': full_url,
-                    'type': 'excel'
-                }
-                
-                categorized_files['OTHER'].append(file_info)
-                logging.info(f"🎯 Found Excel file: {href}")
-                
-            # Skip PDF files - only process Excel files
+                    categorized_files['OTHER'].append(file_info)
+                    logging.info(f"🎯 Found Excel file: {text} -> {href}")
+                    
+            # Skip non-Excel files
+            elif href == '#' or href.startswith('javascript:'):
+                logging.debug(f"🔗 Found JavaScript link: {text}")
             elif href.lower().endswith('.pdf'):
                 logging.debug(f"⏭️ Skipping PDF file: {href}")
+            else:
+                logging.debug(f"📄 Found non-file link: {href}")
         
-        # Also check for any subdirectories or additional pages
+        # Also check for any subdirectories that might contain files
         for a in soup.find_all("a", href=True):
             href = a['href']
             text = a.get_text(strip=True)
             
-            # Look for DSM, UI, deviation subdirectories
-            if any(keyword in href.lower() or keyword in text.lower() 
-                   for keyword in ['dsm', 'ui', 'deviation', 'blockwise', 'power', 'scheduling', 'daily', 'accounting']):
+            # Look for potential subdirectories (not files)
+            if not href.lower().endswith(('.xls', '.xlsx', '.pdf', '.zip')) and not href.startswith('#'):
                 sub_url = urljoin(ERPC_DSA_URL, href)
                 logging.info(f"🔍 Found potential subdirectory: {text} -> {sub_url}")
                 
@@ -246,74 +220,9 @@ def save_processed_data(processed_data, original_filename):
         return None
     
     try:
-        # Determine target directory based on filename or content
-        target_dir = DOWNLOAD_DIR  # Default directory
-        
-        # Check filename for ERLDC or NRLDC indicators
-        filename_lower = original_filename.lower()
-        if 'erldc' in filename_lower or 'eastern' in filename_lower:
-            target_dir = ERLDC_DIR
-            logging.info(f"📁 Categorizing as ERLDC data: {original_filename}")
-        elif 'nrldc' in filename_lower or 'northern' in filename_lower:
-            target_dir = NRLDC_DIR
-            logging.info(f"📁 Categorizing as NRLDC data: {original_filename}")
-        else:
-            # Check content for ERLDC/NRLDC indicators
-            if processed_data:
-                # Define Eastern and Northern region station keywords
-                eastern_stations = [
-                    'bsphcl', 'dvc', 'east central railway', 'gridco', 'sikkim', 'wbsetcl', 
-                    'apnrl', 'chuzachen', 'dikchu', 'gmrkel', 'jipl', 'rongnichu hep', 
-                    'talcher solar', 'nvvn-bd', 'nea-bihar', 'nvvn-nepal', 'nvvn_bhutan',
-                    'barh-ii', 'barh-i', 'brbcl', 'darlipali', 'fstpp', 'jsweul', 
-                    'jorethang hep', 'khstpp', 'mpl', 'mtps', 'north karanpura', 'npgc', 
-                    'rangit', 'teesta', 'thep', 'tstpp', 'ner', 'eastern'
-                ]
-                
-                northern_stations = [
-                    'nr', 'northern', 'nrldc', 'north'
-                ]
-                
-                erldc_indicators = 0
-                nrldc_indicators = 0
-                
-                for sheet_name, df in processed_data.items():
-                    if not df.empty:
-                        # Check sheet name for regional indicators
-                        sheet_name_lower = sheet_name.lower()
-                        
-                        # Check for Eastern region stations in sheet name
-                        if any(station in sheet_name_lower for station in eastern_stations):
-                            erldc_indicators += 1
-                            logging.info(f"📁 Found Eastern station in sheet name: {sheet_name}")
-                        
-                        # Check for Northern region stations in sheet name
-                        elif any(station in sheet_name_lower for station in northern_stations):
-                            nrldc_indicators += 1
-                            logging.info(f"📁 Found Northern station in sheet name: {sheet_name}")
-                        
-                        # Check data content for station names
-                        sample_data = df.head(10).astype(str).to_string().lower()
-                        
-                        # Check for Eastern region stations in data
-                        if any(station in sample_data for station in eastern_stations):
-                            erldc_indicators += 1
-                            logging.info(f"📁 Found Eastern station in data: {sheet_name}")
-                        
-                        # Check for Northern region stations in data
-                        elif any(station in sample_data for station in northern_stations):
-                            nrldc_indicators += 1
-                            logging.info(f"📁 Found Northern station in data: {sheet_name}")
-                
-                # Determine target directory based on indicators
-                if erldc_indicators > nrldc_indicators:
-                    target_dir = ERLDC_DIR
-                    logging.info(f"📁 Content analysis: Categorizing as ERLDC data ({erldc_indicators} indicators)")
-                elif nrldc_indicators > erldc_indicators:
-                    target_dir = NRLDC_DIR
-                    logging.info(f"📁 Content analysis: Categorizing as NRLDC data ({nrldc_indicators} indicators)")
-                else:
-                    logging.info(f"📁 No clear ERLDC/NRLDC indicators found, saving to main directory")
+        # Save all ERPC data to ERLDC directory
+        target_dir = ERLDC_DIR
+        logging.info(f"📁 Saving ERPC data to: {target_dir}")
         
         # Create output filename
         base_name = os.path.splitext(original_filename)[0]
