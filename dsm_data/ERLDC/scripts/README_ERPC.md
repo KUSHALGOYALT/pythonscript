@@ -29,16 +29,10 @@ A Python script for automatically extracting and processing DSA (Daily Schedulin
 
 ## 📖 Usage
 
-### Manual Update
-Run a one-time update to extract current data:
+### Run Data Extraction
+Extract current data from ERPC website:
 ```bash
-python erpc_extractor.py --update
-```
-
-### Automated Scheduling
-Start the automated scheduler for weekly updates:
-```bash
-python erpc_extractor.py --schedule
+python erpc_extractor.py
 ```
 
 ### Help
@@ -88,9 +82,7 @@ The script categorizes files into:
 - **EXCEL**: General Excel data files
 - **OTHER**: Miscellaneous Excel files
 
-### Scheduling
-- **Weekly**: Every Monday at 9:00 AM
-- **Daily**: Every day at 9:00 AM (when scheduler is running)
+
 
 ## 🔍 How It Works
 
@@ -153,13 +145,7 @@ DATA_TYPES = {
 }
 ```
 
-### Changing Schedule
-Modify the `start_scheduler()` function to change update frequency:
 
-```python
-# Example: Run every day at 2:00 PM
-schedule.every().day.at("14:00").do(scheduled_update)
-```
 
 ## 📈 Monitoring
 
@@ -167,7 +153,6 @@ schedule.every().day.at("14:00").do(scheduled_update)
 Monitor the log file for:
 - File discovery and download status
 - Processing progress and errors
-- Schedule execution times
 
 ### File Tracking
 Check `erpc_file_tracking.json` for:

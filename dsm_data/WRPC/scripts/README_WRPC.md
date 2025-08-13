@@ -35,16 +35,10 @@ A Python script for automatically extracting and processing DSM UI Account data 
 
 ## 📖 Usage
 
-### Manual Update
-Run a one-time update to extract current data:
+### Run Data Extraction
+Extract current data from WRPC website:
 ```bash
-python wrpc_extractor.py --update
-```
-
-### Automated Scheduling
-Start the automated scheduler for weekly updates:
-```bash
-python wrpc_extractor.py --schedule
+python wrpc_extractor.py
 ```
 
 ### Help
@@ -87,9 +81,7 @@ The script categorizes files into:
 - **EXCEL**: General Excel data files
 - **OTHER**: Miscellaneous files
 
-### Scheduling
-- **Weekly**: Every Monday at 9:00 AM
-- **Daily**: Every day at 9:00 AM (when scheduler is running)
+
 
 ## 🔍 How It Works
 
@@ -157,16 +149,10 @@ The script provides detailed logging:
 
 ## 🔄 Automation
 
-### Scheduled Updates
-- **Weekly Schedule**: Every Monday at 9:00 AM
-- **Daily Check**: Every day at 9:00 AM when running
+### Data Processing
+- **Dynamic Discovery**: Automatically finds available files on website
 - **Change Detection**: Only processes new or changed files
 - **File Tracking**: Maintains history of processed files
-
-### Manual Updates
-- **One-time Processing**: Run `--update` for immediate processing
-- **Selective Processing**: Can process specific files or all files
-- **Force Processing**: Can override change detection if needed
 
 ## 📊 Data Organization
 
